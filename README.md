@@ -7,7 +7,7 @@
 - **零额外进程**：原生动态库（`.dylib` / `.so`）运行在 CPA 进程内，无需 Python、Node.js、Docker 或独立服务。
 - 真实 shadcn/ui 界面：Token 趋势、模型 / 匿名 Key / 请求明细与筛选。
 
-**状态：v0.3.5 / CLIProxyAPI 7.x / macOS、Linux 与 Windows。MIT 开源。**
+**状态：v0.3.6 / CLIProxyAPI 7.x 与 8.x（Codex 额度估算需 8.x）/ macOS、Linux 与 Windows。MIT 开源。**
 
 ## 安装
 
@@ -29,7 +29,7 @@ plugins:
 2. 重启 CLIProxyAPI，打开管理面板 → **插件商店** → 找到 **CPA Usage Report** → 安装。
 3. 登录 CPA 管理中心并勾选“记住密码”，打开 **插件 → Usage Report**（或访问 `/v0/resource/plugins/usage-report/report`）；页面复用同源管理中心会话访问受保护的插件 API。
 
-> 此源提供 `ting1e/cpa-usage` 分支版本，包含 TPS、总耗时与 TTFT 统计。若已使用原作者的商店源，请替换该源（其他插件商店源可保留），避免两个源中的同名 `usage-report` 指向不同仓库；在插件商店刷新并更新至 **0.3.5**，重启 CPA。保留原 `db_path` 和 SQLite 数据库，不要删除历史数据。确保数据库父目录已存在且 CPA 运行用户有写权限。Docker 部署时，数据库路径应位于持久化挂载目录。
+> 此源提供 `ting1e/cpa-usage` 分支版本，包含 TPS、总耗时、TTFT、Codex 额度估算与 API 等价费用。若已使用原作者的商店源，请替换该源（其他插件商店源可保留），避免两个源中的同名 `usage-report` 指向不同仓库；在插件商店刷新并更新至 **0.3.6**，重启 CPA。保留原 `db_path` 和 SQLite 数据库，不要删除历史数据。确保数据库父目录已存在且 CPA 运行用户有写权限。Docker 部署时，数据库路径应位于持久化挂载目录。
 
 > CPA 访问 GitHub API 查插件信息有匿名频率限制；若遇到 rate limit，可为 CPA 进程配置 `GITHUB_TOKEN` 环境变量，并在 `plugins.store-auth` 添加 `type: github-token`、`token-env: GITHUB_TOKEN` 的规则。
 
@@ -38,9 +38,9 @@ plugins:
 从 [Releases](https://github.com/ting1e/cpa-usage/releases) 下载对应平台的 `usage-report_{version}_{goos}_{goarch}.zip`，解压后放入插件目录：
 
 ```bash
-unzip usage-report_0.3.5_darwin_arm64.zip
+unzip usage-report_0.3.6_darwin_arm64.zip
 mkdir -p <plugins-dir>/darwin/arm64
-cp usage-report-v0.3.5.dylib <plugins-dir>/darwin/arm64/
+cp usage-report-v0.3.6.dylib <plugins-dir>/darwin/arm64/
 # Linux 为 .so，目录名相应为 linux/amd64 或 linux/arm64
 ```
 
@@ -126,8 +126,8 @@ cp dist/assets/* ../plugin/web/assets/
 ```sh
 # 1. 更新 VERSION、CHANGELOG.md，提交并合并到 main
 # 2. 打 tag 推送，流水线自动发布
-git tag v0.3.5
-git push origin v0.3.5
+git tag v0.3.6
+git push origin v0.3.6
 # 3. 更新插件商店 registry 中的 version 字段
 ```
 

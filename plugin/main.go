@@ -82,7 +82,7 @@ var webFS embed.FS
 const abiVersion uint32 = 1
 
 // version is injected at release time via -ldflags "-X main.version=..."
-var version = "0.3.5"
+var version = "0.3.6"
 
 type envelope struct {
 	OK     bool            `json:"ok"`

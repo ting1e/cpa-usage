@@ -4,9 +4,9 @@
     {
       "id": "usage-report",
       "name": "CPA Usage Report",
-      "description": "Local-first token usage dashboard: real-time collection, model/key breakdown, output TPS, request latency and TTFT.",
+      "description": "Local-first token usage dashboard: output TPS, latency, TTFT, Codex quota estimates and editable API-equivalent USD costs.",
       "author": "ting1e",
-      "version": "0.3.5",
+      "version": "0.3.6",
       "repository": "https://github.com/ting1e/cpa-usage",
       "homepage": "https://github.com/ting1e/cpa-usage",
       "license": "MIT",

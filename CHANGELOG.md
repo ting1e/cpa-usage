@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.6
 
 - Capture CPA 8.x Codex credential identity and sanitized 5-hour/weekly quota observations without storing arbitrary response headers or changing existing dedup identities.
 - Estimate per-account/model/tier quota capacity and USD equivalents from adjacent serial CPA activity; exclude idle gaps, resets, failures and ambiguous samples. Explicitly warn that concurrent external account activity cannot be separated from account-level snapshots.

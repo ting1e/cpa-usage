@@ -23,7 +23,7 @@ plugins:
 
 Then install from the management panel: **Plugin Store → CPA Usage Report → Install**.
 
-This fork's v0.3.5 adds output TPS, request latency and TTFT metrics. When upgrading from the original author's source, replace that source with the URL above, refresh the store, update `usage-report` and restart CPA. Keep the existing `db_path` and SQLite history; ensure its parent directory exists and is writable by the CPA process.
+This fork's v0.3.6 includes output TPS, request latency, TTFT, Codex quota estimates (CPA 8.x required) and editable API-equivalent USD costs. When upgrading from the original author's source, replace that source with the URL above, refresh the store, update `usage-report` and restart CPA. Keep the existing `db_path` and SQLite history; ensure its parent directory exists and is writable by the CPA process. Account-level quota snapshots cannot distinguish external Codex use concurrent with CPA activity; estimates explicitly retain this limitation.
 
 ## Manual install
 
