@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Capture CPA 8.x Codex credential identity and sanitized 5-hour/weekly quota observations without storing arbitrary response headers or changing existing dedup identities.
+- Estimate per-account/model/tier quota capacity and USD equivalents from adjacent serial CPA activity; exclude idle gaps, resets, failures and ambiguous samples. Explicitly warn that concurrent external account activity cannot be separated from account-level snapshots.
+- Add editable model API-equivalent USD prices, partial/unpriced coverage and request/model/key cost details; include quota and pricing regression tests.
+
 ## 0.3.5
 
 - Add output TPS, average request latency, and average time to first token (TTFT) to the dashboard and model/key/request detail views.

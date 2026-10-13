@@ -69,6 +69,8 @@ import {
   ChartTooltipContent,
 } from "@/components/ui/chart";
 import { compact, dateKey, fmt, formatDuration, formatTPS, groups, requestTPS, summarize, trend } from "./analytics";
+import { QuotaPanel, readPrices } from "./components/quota-panel";
+import { costs, eventCost, formatUSD } from "./quota";
 import "./index.css";
 
 const chartConfig = {
@@ -206,6 +208,7 @@ function App() {
     [tab, setTab] = useState("model"),
     [page, setPage] = useState(0),
     [sort, setSort] = useState("tokens"),
+    [prices, setPrices] = useState(readPrices),
     [dark, setDark] = useState(
       () => localStorage.getItem("cpa-usage-theme") === "dark",
     );
@@ -270,7 +273,9 @@ function App() {
     let result =
       tab === "requests"
         ? [...events].reverse()
-        : groups(events, tab === "model" ? "model" : "key");
+        : groups(events, tab === "model" ? "model" : "key").map((r) => ({
+          ...r, ...costs(events.filter((e) => e[tab === "model" ? "model" : "key"] === r.name), prices),
+        }));
     result = result.filter((r) =>
       (r.name || r.model + " " + r.key)
         .toLowerCase()
@@ -289,7 +294,7 @@ function App() {
             : b.input + b.output - (a.input + a.output),
       );
     return result;
-  }, [events, tab, query, sort]);
+  }, [events, tab, query, sort, prices]);
   const maxPage = Math.max(0, Math.ceil(rows.length / 8) - 1),
     shown = rows.slice(
       Math.min(page, maxPage) * 8,
@@ -549,6 +554,7 @@ function App() {
               loading={loading}
             />
           </section>
+          <QuotaPanel events={events} quotaEvents={data?.quota_events || []} prices={prices} onPrices={setPrices} loading={loading} />
           <Card className="animate-in fade-in slide-in-from-bottom-2 duration-500 [animation-delay:80ms] shadow-none">
             <CardHeader className="flex flex-wrap flex-row items-start justify-between gap-4">
               <div>
@@ -726,7 +732,7 @@ function App() {
                 <TableHeader>
                   <TableRow>
                     {(tab === "requests"
-                      ? ["时间 / 模型", "Key", "状态", "输入", "缓存", "输出", "总耗时", "TTFT", "TPS"]
+                      ? ["时间 / 模型", "Key", "状态", "输入", "缓存", "输出", "总耗时", "TTFT", "TPS", "等价 USD"]
                       : [
                           "模型 / Key",
                           "请求",
@@ -738,6 +744,7 @@ function App() {
                           "平均总耗时",
                           "平均 TTFT",
                           "TPS",
+                          "等价 USD",
                         ]
                     ).map((s, i) => (
                       <TableHead key={s} className={i ? "text-right" : "pl-6"}>
@@ -818,15 +825,19 @@ function App() {
                           ? (r.ttft_ms <= r.latency_ms ? r.ttft_ms : null)
                           : r.avgTTFTMs)}
                       </TableCell>
-                      <TableCell className="pr-6 text-right tabular-nums">
+                      <TableCell className="text-right tabular-nums">
                         {formatTPS(tab === "requests" ? requestTPS(r) : r.tps)}
+                      </TableCell>
+                      <TableCell className="pr-6 text-right tabular-nums" title={tab === "requests" ? "API 等价费用，非订阅实际账单" : `${r.priced} 次已定价 / ${r.unpriced} 次未定价`}>
+                        {formatUSD(tab === "requests" ? eventCost(r, prices) : r.usd)}
+                        {tab !== "requests" && r.unpriced > 0 && <span className="ml-1 text-xs text-muted-foreground">（部分）</span>}
                       </TableCell>
                     </TableRow>
                   ))}
                   {!shown.length && (
                     <TableRow>
                       <TableCell
-                        colSpan={tab === "requests" ? 9 : 10}
+                        colSpan={tab === "requests" ? 10 : 11}
                         className="h-32 text-center text-muted-foreground"
                       >
                         {loading

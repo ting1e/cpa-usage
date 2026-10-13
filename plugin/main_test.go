@@ -63,7 +63,7 @@ func TestManagementReport(t *testing.T) {
 	}
 	t.Logf("page ok: %d bytes, %s", len(body), ct)
 
-	status, ct, js := callMgmt(t, "/v0/resource/plugins/usage-report/assets/index-C6tUkKYW.js", "GET")
+	status, ct, js := callMgmt(t, "/v0/resource/plugins/usage-report/assets/index-BbaLNx4Z.js", "GET")
 	if status != 200 || len(js) < 100000 {
 		t.Fatalf("js: %d %s %d bytes", status, ct, len(js))
 	}

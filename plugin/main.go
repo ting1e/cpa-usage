@@ -170,8 +170,8 @@ func handleMethod(method string, req []byte) ([]byte, error) {
 			{"Method":"POST","Path":"/plugins/usage-report/api/collect","Menu":"","Description":"collect trigger"}
 		],"resources":[
 			{"Path":"/report","Menu":"Usage Report","Description":"CPA usage dashboard"},
-			{"Path":"/assets/index-C6tUkKYW.js","Menu":"","Description":"dashboard js"},
-			{"Path":"/assets/index-B7tZGLVi.css","Menu":"","Description":"dashboard css"}
+			{"Path":"/assets/index-BbaLNx4Z.js","Menu":"","Description":"dashboard js"},
+			{"Path":"/assets/index-B1mpJtDC.css","Menu":"","Description":"dashboard css"}
 		]}`)
 	case "usage.handle":
 		handleUsage(req)
@@ -320,9 +320,22 @@ func handleUsage(req []byte) {
 	}
 	digest := sha1.Sum(payload)
 	// Keep the existing dedup identity when adding optional protocol metadata.
-	if u.Provider != "" || u.ExecutorType != "" {
+	if u.Provider != "" || u.ExecutorType != "" || u.AuthID != "" || u.AuthIndex != "" || u.RequestID != "" || len(u.ResponseHeaders) > 0 {
 		event["provider"] = u.Provider
 		event["executor_type"] = u.ExecutorType
+		if u.AuthID != "" || u.AuthIndex != "" || u.RequestID != "" || len(u.ResponseHeaders) > 0 {
+			event["auth_id"] = u.AuthID
+			event["auth_index"] = u.AuthIndex
+			event["auth_type"] = u.AuthType
+			event["request_id"] = u.RequestID
+			event["response_model"] = u.ResponseModel
+			event["service_tier"] = u.ResponseServiceTier
+			if u.ResponseServiceTier == "" {
+				event["service_tier"] = u.ServiceTier
+			}
+			event["observed_at"] = time.Now().Format(time.RFC3339Nano)
+			event["quota"] = parseCodexQuota(u.ResponseHeaders, time.Now())
+		}
 		payload, err = json.Marshal(event)
 		if err != nil {
 			return
@@ -340,18 +353,26 @@ func handleUsage(req []byte) {
 }
 
 type usageRecord struct {
-	Provider        string
-	ExecutorType    string
-	Model           string
-	Alias           string
-	APIKey          string
-	Source          string
-	ReasoningEffort string
-	RequestedAt     time.Time
-	Latency         time.Duration
-	TTFT            time.Duration
-	Failed          bool
-	Detail          struct {
+	AuthID              string
+	AuthIndex           string
+	AuthType            string
+	RequestID           string
+	ResponseModel       string
+	ServiceTier         string
+	ResponseServiceTier string
+	ResponseHeaders     map[string][]string
+	Provider            string
+	ExecutorType        string
+	Model               string
+	Alias               string
+	APIKey              string
+	Source              string
+	ReasoningEffort     string
+	RequestedAt         time.Time
+	Latency             time.Duration
+	TTFT                time.Duration
+	Failed              bool
+	Detail              struct {
 		InputTokens         int64
 		OutputTokens        int64
 		ReasoningTokens     int64
@@ -391,15 +412,15 @@ func handleManagement(req []byte) ([]byte, error) {
 		}
 		return managementResponse(200, "text/html; charset=utf-8", html)
 	}
-	if strings.HasSuffix(m.Path, "/assets/index-C6tUkKYW.js") {
-		js, err := webFS.ReadFile("web/assets/index-C6tUkKYW.js")
+	if strings.HasSuffix(m.Path, "/assets/index-BbaLNx4Z.js") {
+		js, err := webFS.ReadFile("web/assets/index-BbaLNx4Z.js")
 		if err != nil {
 			return errorEnvelope("asset_missing", err.Error()), nil
 		}
 		return managementResponse(200, "application/javascript; charset=utf-8", js)
 	}
-	if strings.HasSuffix(m.Path, "/assets/index-B7tZGLVi.css") {
-		css, err := webFS.ReadFile("web/assets/index-B7tZGLVi.css")
+	if strings.HasSuffix(m.Path, "/assets/index-B1mpJtDC.css") {
+		css, err := webFS.ReadFile("web/assets/index-B1mpJtDC.css")
 		if err != nil {
 			return errorEnvelope("asset_missing", err.Error()), nil
 		}
@@ -440,31 +461,46 @@ func managementResponse(status int, contentType string, body []byte) ([]byte, er
 // ---- usage api (compatible with cpa-usage frontend contract) ----
 
 type dbEvent struct {
-	Timestamp    string         `json:"timestamp"`
-	Model        string         `json:"model"`
-	Provider     string         `json:"provider"`
-	ExecutorType string         `json:"executor_type"`
-	Alias        string         `json:"alias"`
-	Source       string         `json:"source"`
-	APIKey       string         `json:"api_key"`
-	Failed       bool           `json:"failed"`
-	LatencyMs    float64        `json:"latency_ms"`
-	TTFTMs       float64        `json:"ttft_ms"`
-	Tokens       map[string]any `json:"tokens"`
+	AuthID        string         `json:"auth_id"`
+	AuthIndex     string         `json:"auth_index"`
+	AuthType      string         `json:"auth_type"`
+	RequestID     string         `json:"request_id"`
+	ResponseModel string         `json:"response_model"`
+	ServiceTier   string         `json:"service_tier"`
+	ObservedAt    string         `json:"observed_at"`
+	Quota         *codexQuota    `json:"quota"`
+	Timestamp     string         `json:"timestamp"`
+	Model         string         `json:"model"`
+	Provider      string         `json:"provider"`
+	ExecutorType  string         `json:"executor_type"`
+	Alias         string         `json:"alias"`
+	Source        string         `json:"source"`
+	APIKey        string         `json:"api_key"`
+	Failed        bool           `json:"failed"`
+	LatencyMs     float64        `json:"latency_ms"`
+	TTFTMs        float64        `json:"ttft_ms"`
+	Tokens        map[string]any `json:"tokens"`
 }
 
 type outEvent struct {
-	Ts        float64  `json:"ts"`
-	Model     string   `json:"model"`
-	Key       string   `json:"key"`
-	Input     int64    `json:"input"`
-	Output    int64    `json:"output"`
-	Cache     int64    `json:"cache"`
-	Reasoning int64    `json:"reasoning"`
-	Failed    bool     `json:"failed"`
-	LatencyMs float64  `json:"latency_ms"`
-	TTFTMs    float64  `json:"ttft_ms"`
-	TPS       *float64 `json:"tps"`
+	Provider      string      `json:"provider"`
+	Account       string      `json:"account"`
+	AuthType      string      `json:"auth_type"`
+	ResponseModel string      `json:"response_model"`
+	ServiceTier   string      `json:"service_tier"`
+	ObservedTs    float64     `json:"observed_ts"`
+	Quota         *codexQuota `json:"quota"`
+	Ts            float64     `json:"ts"`
+	Model         string      `json:"model"`
+	Key           string      `json:"key"`
+	Input         int64       `json:"input"`
+	Output        int64       `json:"output"`
+	Cache         int64       `json:"cache"`
+	Reasoning     int64       `json:"reasoning"`
+	Failed        bool        `json:"failed"`
+	LatencyMs     float64     `json:"latency_ms"`
+	TTFTMs        float64     `json:"ttft_ms"`
+	TPS           *float64    `json:"tps"`
 }
 
 // requestTPS measures output generation speed, not concurrent throughput.
@@ -541,6 +577,7 @@ func usageResponse(q map[string][]string) ([]byte, error) {
 	hi := float64(b.AddDate(0, 0, 1).Unix())
 
 	events := []outEvent{}
+	quotaEvents := []outEvent{}
 	bins := map[string]*outBucket{}
 	order := []string{}
 	skipped := 0
@@ -577,9 +614,6 @@ func usageResponse(q map[string][]string) ([]byte, error) {
 				skipped++
 				continue
 			}
-			if ts < lo || ts >= hi {
-				continue
-			}
 			model := e.Model
 			if model == "" {
 				model = e.Alias
@@ -607,12 +641,31 @@ func usageResponse(q map[string][]string) ([]byte, error) {
 					input += cache + creation
 				}
 			}
-			events = append(events, outEvent{
+			account := e.AuthID
+			if account == "" {
+				account = e.AuthIndex
+			}
+			if account != "" {
+				account = "account-" + strings.TrimPrefix(anonKey(account), "key-")
+			}
+			observedTs, _ := parseAnyTime(e.ObservedAt)
+			out := outEvent{
+				Provider: e.Provider, Account: account, AuthType: e.AuthType,
+				ResponseModel: e.ResponseModel, ServiceTier: e.ServiceTier,
+				ObservedTs: observedTs, Quota: e.Quota,
 				Ts: ts, Model: model, Key: anonKey(source),
 				Input: input, Output: output, Cache: cache, Reasoning: reasoning,
 				Failed: e.Failed, LatencyMs: e.LatencyMs, TTFTMs: e.TTFTMs,
 				TPS: requestTPS(output, e.LatencyMs, e.TTFTMs, e.Failed),
-			})
+			}
+			// Quota estimation is independent of the dashboard date/model filters.
+			if strings.EqualFold(e.Provider, "codex") && ts >= float64(now.AddDate(0, 0, -30).UnixNano())/1e9 && ts <= float64(now.UnixNano())/1e9 {
+				quotaEvents = append(quotaEvents, out)
+			}
+			if ts < lo || ts >= hi {
+				continue
+			}
+			events = append(events, out)
 			t := time.Unix(int64(ts), 0)
 			var label string
 			switch bucket {
@@ -643,6 +696,7 @@ func usageResponse(q map[string][]string) ([]byte, error) {
 
 	resp := map[string]interface{}{
 		"events":       events,
+		"quota_events": quotaEvents,
 		"buckets":      buckets,
 		"collected_at": collectedAt(),
 		"collect_err":  collectErr(),
