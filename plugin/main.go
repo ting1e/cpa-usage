@@ -63,6 +63,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -169,7 +170,7 @@ func handleMethod(method string, req []byte) ([]byte, error) {
 			{"Method":"POST","Path":"/plugins/usage-report/api/collect","Menu":"","Description":"collect trigger"}
 		],"resources":[
 			{"Path":"/report","Menu":"Usage Report","Description":"CPA usage dashboard"},
-			{"Path":"/assets/index-x8ooMryE.js","Menu":"","Description":"dashboard js"},
+			{"Path":"/assets/index-C6tUkKYW.js","Menu":"","Description":"dashboard js"},
 			{"Path":"/assets/index-B7tZGLVi.css","Menu":"","Description":"dashboard css"}
 		]}`)
 	case "usage.handle":
@@ -292,13 +293,13 @@ func handleUsage(req []byte) {
 		ts = time.Now()
 	}
 	tokens := map[string]int64{
-		"input_tokens":           u.Detail.InputTokens,
-		"output_tokens":          u.Detail.OutputTokens,
-		"reasoning_tokens":       u.Detail.ReasoningTokens,
-		"cached_tokens":          u.Detail.CachedTokens,
-		"cache_read_tokens":      u.Detail.CacheReadTokens,
-		"cache_creation_tokens":  u.Detail.CacheCreationTokens,
-		"total_tokens":           u.Detail.TotalTokens,
+		"input_tokens":          u.Detail.InputTokens,
+		"output_tokens":         u.Detail.OutputTokens,
+		"reasoning_tokens":      u.Detail.ReasoningTokens,
+		"cached_tokens":         u.Detail.CachedTokens,
+		"cache_read_tokens":     u.Detail.CacheReadTokens,
+		"cache_creation_tokens": u.Detail.CacheCreationTokens,
+		"total_tokens":          u.Detail.TotalTokens,
 	}
 	source := u.Source
 	if source == "" {
@@ -390,8 +391,8 @@ func handleManagement(req []byte) ([]byte, error) {
 		}
 		return managementResponse(200, "text/html; charset=utf-8", html)
 	}
-	if strings.HasSuffix(m.Path, "/assets/index-x8ooMryE.js") {
-		js, err := webFS.ReadFile("web/assets/index-x8ooMryE.js")
+	if strings.HasSuffix(m.Path, "/assets/index-C6tUkKYW.js") {
+		js, err := webFS.ReadFile("web/assets/index-C6tUkKYW.js")
 		if err != nil {
 			return errorEnvelope("asset_missing", err.Error()), nil
 		}
@@ -453,16 +454,31 @@ type dbEvent struct {
 }
 
 type outEvent struct {
-	Ts        float64 `json:"ts"`
-	Model     string  `json:"model"`
-	Key       string  `json:"key"`
-	Input     int64   `json:"input"`
-	Output    int64   `json:"output"`
-	Cache     int64   `json:"cache"`
-	Reasoning int64   `json:"reasoning"`
-	Failed    bool    `json:"failed"`
-	LatencyMs float64 `json:"latency_ms"`
-	TTFTMs    float64 `json:"ttft_ms"`
+	Ts        float64  `json:"ts"`
+	Model     string   `json:"model"`
+	Key       string   `json:"key"`
+	Input     int64    `json:"input"`
+	Output    int64    `json:"output"`
+	Cache     int64    `json:"cache"`
+	Reasoning int64    `json:"reasoning"`
+	Failed    bool     `json:"failed"`
+	LatencyMs float64  `json:"latency_ms"`
+	TTFTMs    float64  `json:"ttft_ms"`
+	TPS       *float64 `json:"tps"`
+}
+
+// requestTPS measures output generation speed, not concurrent throughput.
+// A zero TTFT means the host did not report it, so use the full latency.
+func requestTPS(output int64, latencyMs, ttftMs float64, failed bool) *float64 {
+	if failed || output <= 0 || latencyMs <= 0 || ttftMs < 0 || ttftMs >= latencyMs ||
+		math.IsNaN(latencyMs) || math.IsInf(latencyMs, 0) || math.IsNaN(ttftMs) || math.IsInf(ttftMs, 0) {
+		return nil
+	}
+	tps := float64(output) * 1000 / (latencyMs - ttftMs)
+	if math.IsNaN(tps) || math.IsInf(tps, 0) {
+		return nil
+	}
+	return &tps
 }
 
 type outBucket struct {
@@ -595,6 +611,7 @@ func usageResponse(q map[string][]string) ([]byte, error) {
 				Ts: ts, Model: model, Key: anonKey(source),
 				Input: input, Output: output, Cache: cache, Reasoning: reasoning,
 				Failed: e.Failed, LatencyMs: e.LatencyMs, TTFTMs: e.TTFTMs,
+				TPS: requestTPS(output, e.LatencyMs, e.TTFTMs, e.Failed),
 			})
 			t := time.Unix(int64(ts), 0)
 			var label string

@@ -21,9 +21,9 @@ func TestRegister(t *testing.T) {
 func mgmtReq(path, method string) []byte {
 	req, _ := json.Marshal(map[string]interface{}{
 		"result": map[string]interface{}{
-			"Method": method,
-			"Path":   path,
-			"Query":  map[string][]string{"start": {"2026-09-09"}, "end": {"2026-09-18"}, "bucket": {"day"}},
+			"Method":  method,
+			"Path":    path,
+			"Query":   map[string][]string{"start": {"2026-09-09"}, "end": {"2026-09-18"}, "bucket": {"day"}},
 			"Headers": map[string][]string{},
 			"Body":    nil,
 		},
@@ -63,7 +63,7 @@ func TestManagementReport(t *testing.T) {
 	}
 	t.Logf("page ok: %d bytes, %s", len(body), ct)
 
-	status, ct, js := callMgmt(t, "/v0/resource/plugins/usage-report/assets/index-x8ooMryE.js", "GET")
+	status, ct, js := callMgmt(t, "/v0/resource/plugins/usage-report/assets/index-C6tUkKYW.js", "GET")
 	if status != 200 || len(js) < 100000 {
 		t.Fatalf("js: %d %s %d bytes", status, ct, len(js))
 	}
@@ -166,6 +166,16 @@ func TestManagementRegisterRoutes(t *testing.T) {
 	for _, r := range reg.Resources {
 		if strings.Contains(r.Path, "/api/") {
 			t.Fatalf("dynamic api must not be registered as resource: %s", r.Path)
+		}
+		status, _, body := callMgmt(t, "/v0/resource/plugins/usage-report"+r.Path, "GET")
+		if status != 200 || len(body) == 0 {
+			t.Fatalf("registered resource %s is unavailable: HTTP %d", r.Path, status)
+		}
+		if strings.HasPrefix(r.Path, "/assets/") {
+			_, _, html := callMgmt(t, "/v0/resource/plugins/usage-report/report", "GET")
+			if !strings.Contains(string(html), "."+r.Path) {
+				t.Fatalf("registered asset %s does not match dashboard HTML", r.Path)
+			}
 		}
 	}
 }

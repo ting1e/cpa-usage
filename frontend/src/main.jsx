@@ -68,7 +68,7 @@ import {
   ChartTooltip,
   ChartTooltipContent,
 } from "@/components/ui/chart";
-import { compact, dateKey, fmt, groups, summarize, trend } from "./analytics";
+import { compact, dateKey, fmt, formatDuration, formatTPS, groups, requestTPS, summarize, trend } from "./analytics";
 import "./index.css";
 
 const chartConfig = {
@@ -280,6 +280,10 @@ function App() {
       result.sort((a, b) =>
         sort === "requests"
           ? b.n - a.n
+          : sort === "tps"
+            ? (b.tps ?? -1) - (a.tps ?? -1)
+          : sort === "latency"
+            ? (b.avgLatencyMs ?? -1) - (a.avgLatencyMs ?? -1)
           : sort === "name"
             ? a.name.localeCompare(b.name)
             : b.input + b.output - (a.input + a.output),
@@ -517,6 +521,33 @@ function App() {
               help="缓存读取 Token / 输入 Token。缓存是输入的一部分。"
               loading={loading}
             />
+            <Metric
+              label="输出 TPS"
+              value={stats.tps === null ? "暂无" : formatTPS(stats.tps)}
+              raw={stats.tps ?? undefined}
+              format={formatTPS}
+              detail={`${fmt(stats.tpsSamples)} 次有效请求 · Token/s`}
+              help="有效请求的输出 Token 总量 / 生成总耗时（秒）。生成耗时 = 总耗时 − TTFT；缺少 TTFT 时使用总耗时。排除失败、无输出和无效耗时，不重复累加推理 Token。不是并发吞吐量。"
+              loading={loading}
+            />
+            <Metric
+              label="平均总耗时"
+              value={stats.avgLatencyMs === null ? "暂无" : formatDuration(stats.avgLatencyMs)}
+              raw={stats.avgLatencyMs ?? undefined}
+              format={formatDuration}
+              detail={`${fmt(stats.latencySamples)} 次有耗时记录的请求`}
+              help="请求开始到完成的总耗时的算术平均，包含成功和失败请求。零值或缺失耗时不参与平均。单位：秒。"
+              loading={loading}
+            />
+            <Metric
+              label="平均首 Token 延迟"
+              value={stats.avgTTFTMs === null ? "暂无" : formatDuration(stats.avgTTFTMs)}
+              raw={stats.avgTTFTMs ?? undefined}
+              format={formatDuration}
+              detail={`${fmt(stats.ttftSamples)} 次有效 TTFT 记录`}
+              help="TTFT：请求开始到首个 Token 返回的耗时。仅对大于零且不超过总耗时的记录求算术平均，包含成功和失败请求。零值视为未上报。单位：秒。"
+              loading={loading}
+            />
           </section>
           <Card className="animate-in fade-in slide-in-from-bottom-2 duration-500 [animation-delay:80ms] shadow-none">
             <CardHeader className="flex flex-wrap flex-row items-start justify-between gap-4">
@@ -683,6 +714,8 @@ function App() {
                     <SelectContent>
                       <SelectItem value="tokens">Token 降序</SelectItem>
                       <SelectItem value="requests">请求数降序</SelectItem>
+                      <SelectItem value="tps">TPS 降序</SelectItem>
+                      <SelectItem value="latency">总耗时降序</SelectItem>
                       <SelectItem value="name">名称排序</SelectItem>
                     </SelectContent>
                   </Select>
@@ -693,7 +726,7 @@ function App() {
                 <TableHeader>
                   <TableRow>
                     {(tab === "requests"
-                      ? ["时间 / 模型", "Key", "状态", "输入", "缓存", "输出"]
+                      ? ["时间 / 模型", "Key", "状态", "输入", "缓存", "输出", "总耗时", "TTFT", "TPS"]
                       : [
                           "模型 / Key",
                           "请求",
@@ -702,6 +735,9 @@ function App() {
                           "缓存",
                           "输出",
                           "总 Token",
+                          "平均总耗时",
+                          "平均 TTFT",
+                          "TPS",
                         ]
                     ).map((s, i) => (
                       <TableHead key={s} className={i ? "text-right" : "pl-6"}>
@@ -768,18 +804,29 @@ function App() {
                       ))}
                       {tab !== "requests" && (
                         <TableCell
-                          className="pr-6 text-right font-medium tabular-nums"
+                          className="text-right font-medium tabular-nums"
                           title={fmt(r.input + r.output)}
                         >
                           {compact(r.input + r.output)}
                         </TableCell>
                       )}
+                      <TableCell className="text-right tabular-nums">
+                        {formatDuration(tab === "requests" ? r.latency_ms : r.avgLatencyMs)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {formatDuration(tab === "requests"
+                          ? (r.ttft_ms <= r.latency_ms ? r.ttft_ms : null)
+                          : r.avgTTFTMs)}
+                      </TableCell>
+                      <TableCell className="pr-6 text-right tabular-nums">
+                        {formatTPS(tab === "requests" ? requestTPS(r) : r.tps)}
+                      </TableCell>
                     </TableRow>
                   ))}
                   {!shown.length && (
                     <TableRow>
                       <TableCell
-                        colSpan={7}
+                        colSpan={tab === "requests" ? 9 : 10}
                         className="h-32 text-center text-muted-foreground"
                       >
                         {loading
