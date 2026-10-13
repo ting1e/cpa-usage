@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.5
+
+- Add output TPS, average request latency, and average time to first token (TTFT) to the dashboard and model/key/request detail views.
+- Calculate aggregate TPS from total eligible output tokens and generation duration; exclude failed requests and invalid timing samples, and preserve historical data without migration.
+- Add TPS and latency sorting, performance metric tests, and embedded asset route consistency checks.
+- Publish this fork's plugin store registry and release artifacts under `ting1e/cpa-usage`.
+
 ## 0.3.4
 
 - Fix Claude input and total tokens to include cache reads and creation; cache creation no longer counts as a cache hit (#14).

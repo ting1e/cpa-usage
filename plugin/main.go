@@ -82,7 +82,7 @@ var webFS embed.FS
 const abiVersion uint32 = 1
 
 // version is injected at release time via -ldflags "-X main.version=..."
-var version = "0.2.1"
+var version = "0.3.5"
 
 type envelope struct {
 	OK     bool            `json:"ok"`
@@ -162,7 +162,7 @@ func handleMethod(method string, req []byte) ([]byte, error) {
 	switch method {
 	case "plugin.register", "plugin.reconfigure":
 		applyConfig(req)
-		return okEnvelopeJSON(`{"schema_version":1,"metadata":{"Name":"usage-report","Version":"` + version + `","Author":"local","GitHubRepository":"https://github.com/andyWang1688/cpa-usage","Logo":"","ConfigFields":[]},"capabilities":{"usage_plugin":true,"management_api":true}}`)
+		return okEnvelopeJSON(`{"schema_version":1,"metadata":{"Name":"usage-report","Version":"` + version + `","Author":"ting1e","GitHubRepository":"https://github.com/ting1e/cpa-usage","Logo":"","ConfigFields":[]},"capabilities":{"usage_plugin":true,"management_api":true}}`)
 	case "management.register":
 		return okEnvelopeJSON(`{"routes":[
 			{"Method":"GET","Path":"/plugins/usage-report/api/usage","Menu":"","Description":"usage data api"},

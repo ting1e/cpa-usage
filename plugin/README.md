@@ -14,7 +14,7 @@ Add this registry to `cliproxyapi.conf`:
 plugins:
   enabled: true
   store-sources:
-    - "https://raw.githubusercontent.com/andyWang1688/cpa-usage/main/plugin-store/registry.json"
+     - "https://raw.githubusercontent.com/ting1e/cpa-usage/main/plugin-store/registry.json"
   configs:
     usage-report:
       enabled: true
@@ -22,6 +22,8 @@ plugins:
 ```
 
 Then install from the management panel: **Plugin Store → CPA Usage Report → Install**.
+
+This fork's v0.3.5 adds output TPS, request latency and TTFT metrics. When upgrading from the original author's source, replace that source with the URL above, refresh the store, update `usage-report` and restart CPA. Keep the existing `db_path` and SQLite history; ensure its parent directory exists and is writable by the CPA process.
 
 ## Manual install
 
@@ -34,7 +36,7 @@ cp usage-report.dylib <plugins-dir>/<goos>/<goarch>/
 ## Dashboard
 
 - Page: `/v0/resource/plugins/usage-report/report`
-- API: `/v0/resource/plugins/usage-report/api/usage?start=YYYY-MM-DD&end=YYYY-MM-DD&bucket=day|hour|month`
+- API (management authentication required): `/v0/management/plugins/usage-report/api/usage?start=YYYY-MM-DD&end=YYYY-MM-DD&bucket=day|hour|month`
 
 ## Frontend assets
 
