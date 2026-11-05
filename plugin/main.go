@@ -82,7 +82,7 @@ var webFS embed.FS
 const abiVersion uint32 = 1
 
 // version is injected at release time via -ldflags "-X main.version=..."
-var version = "0.3.6"
+var version = "0.4.1"
 
 type envelope struct {
 	OK     bool            `json:"ok"`
@@ -167,11 +167,14 @@ func handleMethod(method string, req []byte) ([]byte, error) {
 		return okEnvelopeJSON(`{"routes":[
 			{"Method":"GET","Path":"/plugins/usage-report/api/usage","Menu":"","Description":"usage data api"},
 			{"Method":"GET","Path":"/plugins/usage-report/api/health","Menu":"","Description":"health"},
-			{"Method":"POST","Path":"/plugins/usage-report/api/collect","Menu":"","Description":"collect trigger"}
+			{"Method":"POST","Path":"/plugins/usage-report/api/collect","Menu":"","Description":"collect trigger"},
+			{"Method":"GET","Path":"/plugins/usage-report/api/pricing","Menu":"","Description":"model prices"},
+			{"Method":"POST","Path":"/plugins/usage-report/api/pricing","Menu":"","Description":"custom model price"},
+			{"Method":"POST","Path":"/plugins/usage-report/api/pricing/refresh","Menu":"","Description":"refresh public prices"}
 		],"resources":[
 			{"Path":"/report","Menu":"Usage Report","Description":"CPA usage dashboard"},
-			{"Path":"/assets/index-BbaLNx4Z.js","Menu":"","Description":"dashboard js"},
-			{"Path":"/assets/index-B1mpJtDC.css","Menu":"","Description":"dashboard css"}
+			{"Path":"/assets/index-Bq7W7aEJ.js","Menu":"","Description":"dashboard js"},
+			{"Path":"/assets/index-NlXwSeJL.css","Menu":"","Description":"dashboard css"}
 		]}`)
 	case "usage.handle":
 		handleUsage(req)
@@ -244,6 +247,9 @@ func openDB(path string) {
 		return
 	}
 	_, err = conn.Exec("CREATE TABLE IF NOT EXISTS usage_events (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, dedup TEXT UNIQUE, payload TEXT)")
+	if err == nil {
+		err = initPricing(conn)
+	}
 	if err != nil {
 		lastErr = "sqlite migrate: " + err.Error()
 		_ = conn.Close()
@@ -293,13 +299,13 @@ func handleUsage(req []byte) {
 		ts = time.Now()
 	}
 	tokens := map[string]int64{
-		"input_tokens":          u.Detail.InputTokens,
-		"output_tokens":         u.Detail.OutputTokens,
-		"reasoning_tokens":      u.Detail.ReasoningTokens,
-		"cached_tokens":         u.Detail.CachedTokens,
-		"cache_read_tokens":     u.Detail.CacheReadTokens,
-		"cache_creation_tokens": u.Detail.CacheCreationTokens,
-		"total_tokens":          u.Detail.TotalTokens,
+		"input_tokens":           u.Detail.InputTokens,
+		"output_tokens":          u.Detail.OutputTokens,
+		"reasoning_tokens":       u.Detail.ReasoningTokens,
+		"cached_tokens":          u.Detail.CachedTokens,
+		"cache_read_tokens":      u.Detail.CacheReadTokens,
+		"cache_creation_tokens":  u.Detail.CacheCreationTokens,
+		"total_tokens":           u.Detail.TotalTokens,
 	}
 	source := u.Source
 	if source == "" {
@@ -320,19 +326,26 @@ func handleUsage(req []byte) {
 	}
 	digest := sha1.Sum(payload)
 	// Keep the existing dedup identity when adding optional protocol metadata.
-	if u.Provider != "" || u.ExecutorType != "" || u.AuthID != "" || u.AuthIndex != "" || u.RequestID != "" || len(u.ResponseHeaders) > 0 {
+	// Model aliases and response model names are metadata: they must not create
+	// a second event for the same underlying request.
+	if u.Provider != "" || u.ExecutorType != "" || u.ResponseModel != "" ||
+		u.ResponseServiceTier != "" || u.ServiceTier != "" ||
+		u.AuthID != "" || u.AuthIndex != "" || u.RequestID != "" || len(u.ResponseHeaders) > 0 {
 		event["provider"] = u.Provider
 		event["executor_type"] = u.ExecutorType
+		if u.ResponseModel != "" {
+			event["response_model"] = u.ResponseModel
+		}
+		if u.ResponseServiceTier != "" {
+			event["service_tier"] = u.ResponseServiceTier
+		} else if u.ServiceTier != "" {
+			event["service_tier"] = u.ServiceTier
+		}
 		if u.AuthID != "" || u.AuthIndex != "" || u.RequestID != "" || len(u.ResponseHeaders) > 0 {
 			event["auth_id"] = u.AuthID
 			event["auth_index"] = u.AuthIndex
 			event["auth_type"] = u.AuthType
 			event["request_id"] = u.RequestID
-			event["response_model"] = u.ResponseModel
-			event["service_tier"] = u.ResponseServiceTier
-			if u.ResponseServiceTier == "" {
-				event["service_tier"] = u.ServiceTier
-			}
 			event["observed_at"] = time.Now().Format(time.RFC3339Nano)
 			event["quota"] = parseCodexQuota(u.ResponseHeaders, time.Now())
 		}
@@ -400,6 +413,7 @@ func handleManagement(req []byte) ([]byte, error) {
 		Method string
 		Path   string
 		Query  map[string][]string
+		Body   []byte
 	}
 	if err := json.Unmarshal(rec, &m); err != nil {
 		return errorEnvelope("bad_request", err.Error()), nil
@@ -412,15 +426,15 @@ func handleManagement(req []byte) ([]byte, error) {
 		}
 		return managementResponse(200, "text/html; charset=utf-8", html)
 	}
-	if strings.HasSuffix(m.Path, "/assets/index-BbaLNx4Z.js") {
-		js, err := webFS.ReadFile("web/assets/index-BbaLNx4Z.js")
+	if strings.HasSuffix(m.Path, "/assets/index-Bq7W7aEJ.js") {
+		js, err := webFS.ReadFile("web/assets/index-Bq7W7aEJ.js")
 		if err != nil {
 			return errorEnvelope("asset_missing", err.Error()), nil
 		}
 		return managementResponse(200, "application/javascript; charset=utf-8", js)
 	}
-	if strings.HasSuffix(m.Path, "/assets/index-B1mpJtDC.css") {
-		css, err := webFS.ReadFile("web/assets/index-B1mpJtDC.css")
+	if strings.HasSuffix(m.Path, "/assets/index-NlXwSeJL.css") {
+		css, err := webFS.ReadFile("web/assets/index-NlXwSeJL.css")
 		if err != nil {
 			return errorEnvelope("asset_missing", err.Error()), nil
 		}
@@ -440,6 +454,31 @@ func handleManagement(req []byte) ([]byte, error) {
 		if err != nil {
 			b, _ := json.Marshal(map[string]interface{}{"error": err.Error()})
 			return managementResponse(400, "application/json; charset=utf-8", b)
+		}
+		return managementResponse(200, "application/json; charset=utf-8", body)
+	}
+	if strings.HasSuffix(m.Path, "/api/pricing") || strings.HasSuffix(m.Path, "/api/pricing/refresh") {
+		ensureDB()
+		var err error
+		status := 400
+		switch {
+		case strings.HasSuffix(m.Path, "/pricing/refresh") && m.Method == "POST":
+			err = refreshPrices()
+			status = 502
+		case strings.HasSuffix(m.Path, "/api/pricing") && m.Method == "POST":
+			err = setCustomPrice(m.Body)
+		case strings.HasSuffix(m.Path, "/api/pricing") && m.Method == "GET":
+			maybeRefreshPrices()
+		default:
+			return managementResponse(405, "application/json", []byte(`{"error":"请求方法不支持"}`))
+		}
+		if err != nil {
+			body, _ := json.Marshal(map[string]string{"error": err.Error()})
+			return managementResponse(status, "application/json", body)
+		}
+		body, err := pricingResponse()
+		if err != nil {
+			return nil, err
 		}
 		return managementResponse(200, "application/json; charset=utf-8", body)
 	}
@@ -483,6 +522,7 @@ type dbEvent struct {
 }
 
 type outEvent struct {
+	costQuote
 	Provider      string      `json:"provider"`
 	Account       string      `json:"account"`
 	AuthType      string      `json:"auth_type"`
@@ -496,6 +536,7 @@ type outEvent struct {
 	Input         int64       `json:"input"`
 	Output        int64       `json:"output"`
 	Cache         int64       `json:"cache"`
+	CacheCreation int64       `json:"cache_creation"`
 	Reasoning     int64       `json:"reasoning"`
 	Failed        bool        `json:"failed"`
 	LatencyMs     float64     `json:"latency_ms"`
@@ -518,11 +559,13 @@ func requestTPS(output int64, latencyMs, ttftMs float64, failed bool) *float64 {
 }
 
 type outBucket struct {
-	Label    string `json:"label"`
-	Input    int64  `json:"input"`
-	Output   int64  `json:"output"`
-	Cache    int64  `json:"cache"`
-	Requests int64  `json:"requests"`
+	Label    string   `json:"label"`
+	Input    int64    `json:"input"`
+	Output   int64    `json:"output"`
+	Cache    int64    `json:"cache"`
+	Requests int64    `json:"requests"`
+	Cost     *float64 `json:"cost"`
+	Unpriced int64    `json:"unpriced"`
 }
 
 func anonKey(source string) string {
@@ -583,11 +626,16 @@ func usageResponse(q map[string][]string) ([]byte, error) {
 	skipped := 0
 
 	ensureDB()
+	maybeRefreshPrices()
 	mu.Lock()
 	var rows *sql.Rows
 	var err error
+	var prices *priceBook
 	if db != nil {
-		rows, err = db.Query("SELECT ts, payload FROM usage_events ORDER BY id")
+		prices, err = loadPriceBook(db)
+		if err == nil {
+			rows, err = db.Query("SELECT ts, payload FROM usage_events ORDER BY id")
+		}
 	}
 	mu.Unlock()
 	if err != nil {
@@ -625,13 +673,13 @@ func usageResponse(q map[string][]string) ([]byte, error) {
 			if source == "" {
 				source = e.APIKey
 			}
-			var input, output, cache, reasoning int64
+			var input, output, cache, creation, reasoning int64
 			if t := e.Tokens; t != nil {
 				input = toI64(t["input_tokens"])
 				output = toI64(t["output_tokens"])
 				read := toI64(t["cache_read_tokens"])
 				cached := toI64(t["cached_tokens"])
-				creation := toI64(t["cache_creation_tokens"])
+				creation = toI64(t["cache_creation_tokens"])
 				cache = read
 				if cache == 0 && cached > 0 && creation == 0 {
 					cache = cached
@@ -649,23 +697,33 @@ func usageResponse(q map[string][]string) ([]byte, error) {
 				account = "account-" + strings.TrimPrefix(anonKey(account), "key-")
 			}
 			observedTs, _ := parseAnyTime(e.ObservedAt)
-			out := outEvent{
+			event := outEvent{
 				Provider: e.Provider, Account: account, AuthType: e.AuthType,
 				ResponseModel: e.ResponseModel, ServiceTier: e.ServiceTier,
 				ObservedTs: observedTs, Quota: e.Quota,
 				Ts: ts, Model: model, Key: anonKey(source),
-				Input: input, Output: output, Cache: cache, Reasoning: reasoning,
+				Input: input, Output: output, Cache: cache, CacheCreation: creation,
+				Reasoning: reasoning,
 				Failed: e.Failed, LatencyMs: e.LatencyMs, TTFTMs: e.TTFTMs,
 				TPS: requestTPS(output, e.LatencyMs, e.TTFTMs, e.Failed),
 			}
-			// Quota estimation is independent of the dashboard date/model filters.
-			if strings.EqualFold(e.Provider, "codex") && ts >= float64(now.AddDate(0, 0, -30).UnixNano())/1e9 && ts <= float64(now.UnixNano())/1e9 {
-				quotaEvents = append(quotaEvents, out)
+			if prices != nil {
+				event.costQuote, err = prices.quote(event)
+				if err != nil {
+					return nil, err
+				}
+			}
+			// Quota observations are independent of dashboard date/model filters.
+			// Current Codex quota headers are account-wide; the dashboard combines
+			// these observations once per account/window even when several GPT
+			// models share the same quota.
+			if strings.EqualFold(e.Provider, "codex") && ts >= float64(now.AddDate(0, 0, -30).Unix()) && ts <= float64(now.Unix()) {
+				quotaEvents = append(quotaEvents, event)
 			}
 			if ts < lo || ts >= hi {
 				continue
 			}
-			events = append(events, out)
+			events = append(events, event)
 			t := time.Unix(int64(ts), 0)
 			var label string
 			switch bucket {
@@ -686,6 +744,15 @@ func usageResponse(q map[string][]string) ([]byte, error) {
 			bk.Output += output
 			bk.Cache += cache
 			bk.Requests++
+			if event.Cost != nil {
+				if bk.Cost == nil {
+					zero := 0.0
+					bk.Cost = &zero
+				}
+				*bk.Cost += *event.Cost
+			} else {
+				bk.Unpriced++
+			}
 		}
 	}
 	sort.Strings(order)

@@ -4,13 +4,17 @@
     {
       "id": "usage-report",
       "name": "CPA Usage Report",
-      "description": "Local-first token usage dashboard: output TPS, latency, TTFT, Codex quota estimates and editable API-equivalent USD costs.",
+      "description": "Local-first token usage dashboard: TPS/latency/TTFT, all Codex GPT models, multi-account quota history, LiteLLM pricing, custom rates and USD/CNY costs.",
       "author": "ting1e",
-      "version": "0.3.6",
+      "version": "0.4.1",
       "repository": "https://github.com/ting1e/cpa-usage",
       "homepage": "https://github.com/ting1e/cpa-usage",
       "license": "MIT",
-      "tags": ["usage", "dashboard", "analytics"]
+      "tags": [
+        "usage",
+        "dashboard",
+        "analytics"
+      ]
     }
   ]
 }

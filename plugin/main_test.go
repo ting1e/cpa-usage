@@ -63,7 +63,7 @@ func TestManagementReport(t *testing.T) {
 	}
 	t.Logf("page ok: %d bytes, %s", len(body), ct)
 
-	status, ct, js := callMgmt(t, "/v0/resource/plugins/usage-report/assets/index-BbaLNx4Z.js", "GET")
+	status, ct, js := callMgmt(t, "/v0/resource/plugins/usage-report/assets/index-Bq7W7aEJ.js", "GET")
 	if status != 200 || len(js) < 100000 {
 		t.Fatalf("js: %d %s %d bytes", status, ct, len(js))
 	}
@@ -152,8 +152,8 @@ func TestManagementRegisterRoutes(t *testing.T) {
 	if err := json.Unmarshal(e.Result, &reg); err != nil {
 		t.Fatal(err)
 	}
-	if len(reg.Routes) != 3 {
-		t.Fatalf("expect 3 authenticated routes, got %d", len(reg.Routes))
+	if len(reg.Routes) != 6 {
+		t.Fatalf("expect 6 authenticated routes, got %d", len(reg.Routes))
 	}
 	for _, r := range reg.Routes {
 		if r.Method != "GET" && r.Method != "POST" {

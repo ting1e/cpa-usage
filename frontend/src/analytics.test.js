@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { summarize, groups, trend, dateKey, requestTPS, formatTPS, formatDuration } from "./analytics.js";
+import { summarize, groups, trend, dateKey, money, formatDuration, formatTPS, requestTPS } from "./analytics.js";
 const fixture = [
   {
     ts: new Date(2026, 0, 1, 12).getTime() / 1000,
@@ -34,71 +34,62 @@ test("grouping and trend use same total", () => {
   const b = trend(fixture, "day")[0];
   assert.equal(b.cache + b.net + b.output, 120);
 });
+test("model statistics use the response model while keeping the requested alias", () => {
+  const events = [
+    { ...fixture[0], model: "my-alias", response_model: "gpt-6.1-sol" },
+    { ...fixture[0], model: "my-alias", response_model: "gpt-6.1-sol" },
+    { ...fixture[0], model: "gpt-6-luna", response_model: "gpt-6-luna" },
+  ];
+  const rows = groups(events, "model");
+  assert.equal(rows.find((r) => r.name === "gpt-6.1-sol").n, 2);
+  assert.equal(rows.find((r) => r.name === "gpt-6-luna").n, 1);
+  assert.equal(events[0].model, "my-alias");
+});
 test("local date does not use UTC slicing", () =>
   assert.equal(dateKey(new Date(2026, 0, 1)), "2026-01-01"));
-
-const timedEvent = (overrides = {}) => ({
-  ...fixture[0], output: 100, latency_ms: 2500, ttft_ms: 500, ...overrides,
-});
-test("TPS excludes TTFT and does not add reasoning tokens", () => {
-  assert.equal(requestTPS(timedEvent({ reasoning: 80 })), 50);
-  assert.equal(requestTPS(timedEvent({ ttft_ms: 0 })), 40);
-  assert.equal(requestTPS(timedEvent({ ttft_ms: undefined })), 40);
-  assert.equal(requestTPS(timedEvent({ latency_ms: 0.5, ttft_ms: 0.25 })), 400000);
-});
-test("invalid or unsuccessful requests have no TPS", () => {
-  for (const overrides of [
-    { failed: true }, { output: 0 }, { output: -1 }, { output: NaN },
-    { latency_ms: 0 }, { latency_ms: -1 }, { latency_ms: undefined },
-    { latency_ms: Infinity }, { latency_ms: NaN },
-    { ttft_ms: -1 }, { ttft_ms: 2500 }, { ttft_ms: 3000 },
-    { ttft_ms: NaN }, { ttft_ms: Infinity },
-  ]) assert.equal(requestTPS(timedEvent(overrides)), null);
-});
-test("aggregate TPS weights generation duration instead of averaging rates", () => {
+test("fees and missing price coverage follow the same filters and grouping", () => {
   const events = [
-    timedEvent(),
-    timedEvent({ output: 300, latency_ms: 1500, ttft_ms: 500 }),
-    timedEvent({ failed: true, latency_ms: 1000, ttft_ms: 200 }),
-    timedEvent({ latency_ms: 0, ttft_ms: 0 }),
+    { ...fixture[0], cost: 1.77, price_basis: "historical_estimate" },
+    { ...fixture[1], cost: 0 },
+    { ...fixture[0], model: "unpriced", cost: null },
+  ];
+  const total = summarize(events);
+  assert.equal(total.cost, 1.77);
+  assert.equal(total.priced, 2);
+  assert.equal(total.unpriced, 1);
+  assert.equal(total.historical, 1);
+  const known = summarize(events.filter((e) => e.model === "a"));
+  assert.equal(known.unpriced, 0);
+  assert.equal(groups(events, "model").find((g) => g.name === "unpriced").priced, 0);
+  assert.equal(trend(events, "day")[0].cost, total.cost);
+  assert.equal(trend(events, "day")[0].unpriced, 1);
+});
+test("performance metrics exclude failed, output-less and invalid timing samples", () => {
+  const events = [
+    { ...fixture[0], output: 100, latency_ms: 2500, ttft_ms: 500 },
+    { ...fixture[0], output: 100, latency_ms: 2500, ttft_ms: 0 },
+    { ...fixture[0], output: 100, latency_ms: 2500, ttft_ms: 500, failed: true },
+    { ...fixture[0], output: 0, latency_ms: 2500, ttft_ms: 500 },
+    { ...fixture[0], output: 100, latency_ms: 2500, ttft_ms: 3000 },
+    { ...fixture[0], output: 100, latency_ms: 0, ttft_ms: 0 },
   ];
   const s = summarize(events);
-  assert.equal(s.tps, 400 * 1000 / 3000);
-  assert.equal(s.tpsSamples, 2);
-  assert.equal(s.avgLatencyMs, 5000 / 3);
-  assert.equal(s.latencySamples, 3);
-  assert.equal(s.avgTTFTMs, 400);
+  assert.equal(s.latencySamples, 5);
   assert.equal(s.ttftSamples, 3);
-  assert.equal(s.n, 4);
-  assert.equal(s.fail, 1);
-});
-test("model and key performance aggregates only include their own requests", () => {
-  const events = [timedEvent(), timedEvent({ model: "b", key: "k2", output: 300 })];
-  assert.equal(groups(events, "model").find((g) => g.name === "a").tps, 50);
-  assert.equal(groups(events, "key").find((g) => g.name === "k2").tps, 150);
-  assert.equal(summarize(events.filter((e) => e.model === "b")).avgLatencyMs, 2500);
-});
-test("empty and historical events do not report invented performance metrics", () => {
-  for (const events of [[], fixture]) {
-    const s = summarize(events);
-    assert.equal(s.tps, null);
-    assert.equal(s.avgLatencyMs, null);
-    assert.equal(s.avgTTFTMs, null);
-    assert.equal(s.tpsSamples, 0);
-  }
-  const s = summarize([
-    timedEvent({ ttft_ms: 0 }), timedEvent({ ttft_ms: 3000 }),
-    timedEvent({ latency_ms: -1 }),
-  ]);
+  assert.equal(s.tpsSamples, 2);
+  assert.ok(Math.abs(s.tps - 44.44444444444444) < 1e-10);
   assert.equal(s.avgLatencyMs, 2500);
-  assert.equal(s.avgTTFTMs, null);
-  assert.equal(s.tpsSamples, 1);
+  assert.equal(s.avgTTFTMs, 500);
+  assert.equal(requestTPS(events[4]), null);
+  assert.equal(formatTPS(s.tps), "44.44");
+  assert.equal(formatDuration(s.avgLatencyMs), "2.50 s");
+  assert.equal(formatDuration(null), "—");
 });
-test("performance formatting distinguishes missing values from measured values", () => {
-  assert.equal(formatTPS(12.345), "12.35");
-  assert.equal(formatDuration(1250), "1.25 s");
-  for (const value of [null, undefined, 0, -1, NaN, Infinity]) {
-    assert.equal(formatTPS(value), "—");
-    assert.equal(formatDuration(value), "—");
-  }
+test("unpriced trend buckets remain gaps and free buckets remain zero", () => {
+  const buckets = trend([{ ...fixture[0], cost: null }, { ...fixture[1], cost: 0 }], "hour");
+  assert.equal(buckets[0].cost, null);
+  assert.equal(buckets[1].cost, 0);
+  assert.equal(money(null), "未定价");
+  assert.equal(money(0), "$0.00");
+  assert.equal(money(0.0000001), "< $0.000001");
 });

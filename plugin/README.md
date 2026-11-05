@@ -3,7 +3,7 @@
 Local-first token usage dashboard for [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI), shipped as a native plugin (`.dylib`/`.so`) running inside the CPA process.
 
 - **Real-time collection**: receives every completed request through the `usage.handle` plugin callback — no polling, no data loss.
-- **Embedded dashboard**: the [cpa-usage](https://github.com/andyWang1688/cpa-usage) shadcn/ui frontend is bundled and served under `/v0/resource/plugins/usage-report/report`.
+- **Embedded dashboard**: the [cpa-usage](https://github.com/ting1e/cpa-usage) shadcn/ui frontend is bundled and served under `/v0/resource/plugins/usage-report/report`.
 - **SQLite storage**: usage events are stored locally in `usage.sqlite`.
 
 ## Install via CPA Plugin Store
@@ -23,7 +23,7 @@ plugins:
 
 Then install from the management panel: **Plugin Store → CPA Usage Report → Install**.
 
-This fork's v0.3.6 includes output TPS, request latency, TTFT, Codex quota estimates (CPA 8.x required) and editable API-equivalent USD costs. When upgrading from the original author's source, replace that source with the URL above, refresh the store, update `usage-report` and restart CPA. Keep the existing `db_path` and SQLite history; ensure its parent directory exists and is writable by the CPA process. Account-level quota snapshots cannot distinguish external Codex use concurrent with CPA activity; estimates explicitly retain this limitation.
+This fork's v0.4.1 is based on upstream v0.4.0. It includes the upstream LiteLLM price engine, custom prices, price versions, cost trends and USD/CNY display, plus output TPS, request latency, TTFT, and multi-account Codex quota estimates/history (CPA 8.x required). All Codex GPT models and future variants are recorded without a model whitelist; response models are priced first with the requested model as fallback. The dashboard reads CPAMC v1, CPAMC v2 (v1.27.0+, host-only storage key) and plaintext saved management sessions. When upgrading from the original author's source, replace that source with the URL above, refresh the store, update `usage-report` and restart CPA. Keep the existing `db_path` and SQLite history; ensure its parent directory exists and is writable by the CPA process. Codex quota headers are account-wide, so shared quotas are counted once per account/window; snapshots cannot distinguish external Codex use concurrent with CPA activity.
 
 ## Manual install
 

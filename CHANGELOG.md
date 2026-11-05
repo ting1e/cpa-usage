@@ -1,16 +1,32 @@
 # Changelog
 
+## 0.4.1
+
+- Rebase the fork on upstream v0.4.0 so the LiteLLM price engine, custom prices, price history, cost trends and USD/CNY display are the single source of truth.
+- Merge output TPS, average latency and average TTFT into the v0.4.0 dashboard, model/key aggregates, request details and sorting.
+- Capture Codex credential identity and sanitized 5-hour/weekly quota observations; add multi-account quota estimates, remaining/reset snapshots and a recent 30-day history with per-model token/cost detail.
+- Support every Codex GPT model and future variants without a model whitelist. Keep the requested model ID, preserve the actual response model, prefer the response model for pricing and fall back to the requested model only.
+- Use backend-calculated per-request costs for quota estimates, and aggregate shared Codex account quotas once instead of duplicating them per model.
+- Preserve legacy SQLite data, protocol dedup identities and unknown-model unpriced behavior; add GPT variant, response-model fallback, shared-account quota and performance regression tests.
+- Fix management-panel “remember password” compatibility for CPAMC v1.27.0+ by supporting both CPAMC v1 (host + user agent) and v2 (host only) secure-storage formats while retaining plaintext JSON compatibility.
+
+## 0.4.0
+
+- Add estimated token costs to the dashboard, trends, and model/key/request details (#17). Show pricing coverage and distinguish unpriced requests from zero cost.
+- Bundle LiteLLM text-model prices, support automatic and manual updates, provider-specific custom rates, and versioned historical estimates. Failed updates retain local prices and show a friendly message.
+- Support USD/CNY display with an editable exchange rate. Show currency symbols beside table prices and currency/token units on price columns and edit fields.
+- Document token-estimation limits and proxy environment variables for public price updates.
+
 ## 0.3.6
 
 - Capture CPA 8.x Codex credential identity and sanitized 5-hour/weekly quota observations without storing arbitrary response headers or changing existing dedup identities.
-- Estimate per-account/model/tier quota capacity and USD equivalents from adjacent serial CPA activity; exclude idle gaps, resets, failures and ambiguous samples. Explicitly warn that concurrent external account activity cannot be separated from account-level snapshots.
-- Add editable model API-equivalent USD prices, partial/unpriced coverage and request/model/key cost details; include quota and pricing regression tests.
+- Estimate per-account/model/tier quota capacity and USD equivalents from adjacent serial CPA activity; exclude idle gaps, resets, failures and ambiguous samples.
+- Add editable model API-equivalent USD prices, partial/unpriced coverage and request/model/key cost details.
 
 ## 0.3.5
 
 - Add output TPS, average request latency, and average time to first token (TTFT) to the dashboard and model/key/request detail views.
 - Calculate aggregate TPS from total eligible output tokens and generation duration; exclude failed requests and invalid timing samples, and preserve historical data without migration.
-- Add TPS and latency sorting, performance metric tests, and embedded asset route consistency checks.
 - Publish this fork's plugin store registry and release artifacts under `ting1e/cpa-usage`.
 
 ## 0.3.4

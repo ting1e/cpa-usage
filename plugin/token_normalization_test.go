@@ -11,6 +11,7 @@ import (
 
 // Keep management tests away from the user's default usage database.
 func TestMain(m *testing.M) {
+	pricingUpdatesEnabled = false
 	dir, err := os.MkdirTemp("", "cpa-test-")
 	if err != nil {
 		panic(err)

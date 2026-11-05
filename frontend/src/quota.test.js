@@ -1,36 +1,24 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { eventCost, costs, estimateQuotas, validatePrices, formatUSD } from "./quota.js";
+import { eventCost, costs, estimateQuotas } from "./quota.js";
 
-const prices = { test: { input: 2, cache: 0.2, output: 10 } };
 const now = 1000000;
 const event = (ts, used, overrides = {}) => ({
   ts, observed_ts: ts + 1, latency_ms: 1000,
   provider: "codex", account: "account-a", model: "test", failed: false,
-  input: 1000000, cache: 500000, output: 100000, reasoning: 50000,
+  input: 1000000, cache: 500000, output: 100000, reasoning: 50000, cost: 2.1,
   quota: { plan: "plus", five_hour: { used_percent: used, reset_at: now + 1000 },
     week: { used_percent: used / 2, reset_at: now + 10000 } }, ...overrides,
 });
 const fixture = () => [event(now - 30, 10), event(now - 28, 12), event(now - 26, 14)];
-const window = (records, key = "five_hour") => estimateQuotas(records, prices, now).accounts[0].windows[key];
+const window = (records, key = "five_hour") => estimateQuotas(records, now).accounts[0].windows[key];
 
-test("API-equivalent cost counts cache as input subset and reasoning as output subset", () => {
-  assert.equal(eventCost(event(now, 10), prices), 2.1);
-  assert.equal(eventCost(event(now, 10, { failed: true }), prices), 2.1);
-  assert.equal(eventCost(event(now, 10, { response_model: "test", model: "alias" }), prices), 2.1);
-  for (const overrides of [{ model: "unknown" }, { cache: 2000000 }, { input: -1 }, { output: NaN }]) {
-    assert.equal(eventCost(event(now, 10, overrides), prices), null);
-  }
-  assert.deepEqual(costs([event(now, 1), event(now, 2, { model: "unknown" })], prices), { usd: 2.1, priced: 1, unpriced: 1 });
-  assert.equal(costs([], prices).usd, null);
-});
-test("price validation rejects malformed and missing rates instead of inventing zero costs", () => {
-  assert.equal(validatePrices(prices), prices);
-  for (const p of [null, [], { test: { input: 1, output: 1 } }, { test: { input: -1, cache: 0, output: 1 } }]) {
-    assert.throws(() => validatePrices(p));
-  }
-  assert.equal(formatUSD(null), "—");
-  assert.equal(formatUSD(0), "$0.00");
+test("cost always comes from the backend canonical quote", () => {
+  assert.equal(eventCost(event(now, 10)), 2.1);
+  assert.equal(eventCost(event(now, 10, { cost: 0 })), 0);
+  assert.equal(eventCost(event(now, 10, { cost: null })), null);
+  assert.deepEqual(costs([event(now, 1), event(now, 2, { cost: null })]), { usd: 2.1, priced: 1, unpriced: 1 });
+  assert.equal(costs([]).usd, null);
 });
 test("consecutive same-account samples estimate both windows and USD capacity", () => {
   const w = window(fixture());
@@ -46,6 +34,23 @@ test("consecutive same-account samples estimate both windows and USD capacity", 
   assert.equal(week.observedPercent, 2);
   assert.ok(Math.abs(week.fullUSD - 210) < 1e-10);
 });
+test("models sharing one account are aggregated once, with per-model details", () => {
+  const records = [
+    event(now - 30, 10, { model: "gpt-6.1-sol", response_model: "gpt-6.1-sol" }),
+    event(now - 28, 12, { model: "gpt-6.1-sol", response_model: "gpt-6.1-sol" }),
+    event(now - 26, 14, { model: "gpt-6-terra", response_model: "gpt-6-terra", cost: 4.2 }),
+    event(now - 24, 18, { model: "gpt-6-terra", response_model: "gpt-6-terra", cost: 4.2 }),
+  ];
+  const data = estimateQuotas(records, now);
+  assert.equal(data.accounts.length, 1);
+  const w = data.accounts[0].windows.five_hour;
+  assert.equal(w.samples, 3);
+  assert.equal(w.observedPercent, 8);
+  assert.equal(w.models.length, 2);
+  assert.deepEqual(w.models.map((m) => m.model).sort(), ["gpt-6-terra", "gpt-6.1-sol"]);
+  assert.equal(w.models.reduce((n, m) => n + m.requests, 0), w.coveredRequests);
+  assert.equal(w.estimatedCPAPercent !== null, true);
+});
 test("idle external consumption establishes a new baseline and is never accumulated", () => {
   const records = [...fixture(), event(now - 10, 80), event(now - 8, 82), event(now - 6, 84)];
   const w = window(records);
@@ -53,8 +58,8 @@ test("idle external consumption establishes a new baseline and is never accumula
   assert.equal(w.samples, 4);
   assert.equal(w.remainingPercent, 16); // account-wide remaining, NOT CPA consumption
 });
-test("missing quota, failures and concurrency break the sample chain", () => {
-  for (const overrides of [{ quota: null }, { failed: true }, { model: "other" }, { service_tier: "priority" }, { latency_ms: 0 }]) {
+test("missing quota, failures, missing cost and concurrency break the sample chain", () => {
+  for (const overrides of [{ quota: null }, { failed: true }, { cost: null }, { latency_ms: 0 }]) {
     const records = [event(now - 10, 10), event(now - 8, 30, overrides), event(now - 6, 40)];
     assert.equal(window(records).samples, 0);
     assert.equal(window(records).fullUSD, null);
@@ -71,28 +76,27 @@ test("resets and out-of-order snapshots cannot create positive debit samples", (
   assert.equal(window([event(now - 10, 20), event(now - 8, 30, { observed_ts: now - 20 }), event(now - 6, 40)]).samples, 1);
 });
 test("accounts stay separate and never fall back to client Key as account identity", () => {
-  const data = estimateQuotas([...fixture(), event(now - 25, 90, { account: "account-b" }), event(now - 22, 95, { account: "", key: "same-client" })], prices, now);
+  const data = estimateQuotas([...fixture(), event(now - 25, 90, { account: "account-b" }), event(now - 22, 95, { account: "", key: "same-client" })], now);
   assert.equal(data.accounts.length, 2);
   assert.equal(data.accounts[0].windows.five_hour.observedPercent, 4);
   assert.equal(data.accounts[1].windows.five_hour.fullUSD, null);
   assert.equal(data.missingAccount, 1);
-  assert.equal(estimateQuotas([event(now, 20, { provider: "openai" })], prices, now).accounts.length, 0);
+  assert.equal(estimateQuotas([event(now, 20, { provider: "openai" })], now).accounts.length, 0);
 });
 test("empty, expired, zero-delta and insufficient observations remain unknown", () => {
-  assert.deepEqual(estimateQuotas([], prices, now), { missingAccount: 0, accounts: [] });
+  assert.deepEqual(estimateQuotas([], now), { missingAccount: 0, accounts: [] });
   assert.equal(window([event(now - 10, 10)]).fullUSD, null);
   assert.equal(window([event(now - 10, 10), event(now - 8, 10), event(now - 6, 10)]).fullUSD, null);
-  const expired = estimateQuotas(fixture(), prices, now + 2000).accounts[0].windows.five_hour;
+  const expired = estimateQuotas(fixture(), now + 2000).accounts[0].windows.five_hour;
   assert.equal(expired.active, false);
   assert.equal(expired.remainingPercent, null);
   assert.equal(expired.fullUSD, null);
   assert.equal(window([event(now - 10, 10, { quota: null })]), null);
 });
-test("USD and quota estimates respond to user prices without leaking model filters into account sampling", () => {
-  const records = fixture();
-  const base = estimateQuotas(records, prices, now).accounts[0].windows.five_hour;
-  const doubled = estimateQuotas(records, { test: { input: 4, cache: 0.4, output: 20 } }, now).accounts[0].windows.five_hour;
-  assert.equal(doubled.fullUSD, base.fullUSD * 2);
-  assert.equal(doubled.estimatedCPAPercent, base.estimatedCPAPercent);
-  assert.equal(window(records.map((e) => ({ ...e, model: "unknown" }))).fullUSD, null);
+test("quota history keeps the recent 30-day observations for both windows", () => {
+  const w = window(fixture());
+  assert.equal(w.history.length, 3);
+  assert.deepEqual(w.history.map((h) => h.usedPercent), [10, 12, 14]);
+  assert.ok(w.history[0].observedAt < w.history[2].observedAt);
+  assert.equal(window(fixture(), "week").history.length, 3);
 });
