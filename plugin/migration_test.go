@@ -68,9 +68,12 @@ func TestLegacyDatabaseMigratesTimestampsAndModelIndex(t *testing.T) {
 	if err := db.QueryRow("SELECT ts_unix FROM usage_events WHERE dedup='legacy-dedup'").Scan(&tsUnix); err != nil {
 		t.Fatal(err)
 	}
-	want := time.Date(2026, 9, 10, 11, 30, 0, 0, time.Local).Unix()
-	if tsUnix != want {
-		t.Fatalf("ts_unix=%d, want %d", tsUnix, want)
+	wantTime, err := time.Parse(time.RFC3339, "2026-09-10T11:30:00+08:00")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tsUnix != wantTime.Unix() {
+		t.Fatalf("ts_unix=%d, want %d", tsUnix, wantTime.Unix())
 	}
 	var index string
 	if err := db.QueryRow("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_usage_events_ts_unix'").Scan(&index); err != nil {
