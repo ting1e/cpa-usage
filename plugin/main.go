@@ -82,7 +82,7 @@ var webFS embed.FS
 const abiVersion uint32 = 1
 
 // version is injected at release time via -ldflags "-X main.version=..."
-var version = "0.4.1"
+var version = "0.4.2"
 
 type envelope struct {
 	OK     bool            `json:"ok"`
@@ -173,7 +173,7 @@ func handleMethod(method string, req []byte) ([]byte, error) {
 			{"Method":"POST","Path":"/plugins/usage-report/api/pricing/refresh","Menu":"","Description":"refresh public prices"}
 		],"resources":[
 			{"Path":"/report","Menu":"Usage Report","Description":"CPA usage dashboard"},
-			{"Path":"/assets/index-Bq7W7aEJ.js","Menu":"","Description":"dashboard js"},
+			{"Path":"/assets/index-XXL_oFkp.js","Menu":"","Description":"dashboard js"},
 			{"Path":"/assets/index-NlXwSeJL.css","Menu":"","Description":"dashboard css"}
 		]}`)
 	case "usage.handle":
@@ -246,7 +246,10 @@ func openDB(path string) {
 		lastErr = "sqlite open: " + err.Error()
 		return
 	}
-	_, err = conn.Exec("CREATE TABLE IF NOT EXISTS usage_events (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, dedup TEXT UNIQUE, payload TEXT)")
+	_, err = conn.Exec("CREATE TABLE IF NOT EXISTS usage_events (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, ts_unix INTEGER, dedup TEXT UNIQUE, payload TEXT)")
+	if err == nil {
+		err = migrateUsageSchema(conn)
+	}
 	if err == nil {
 		err = initPricing(conn)
 	}
@@ -265,6 +268,152 @@ var lastOpened string
 func ensureDB() {
 	if db == nil {
 		openDB(defaultDBPath())
+	}
+}
+
+// migrateUsageSchema upgrades old databases in place. History rows are never
+// deleted; missing timestamps and the used-model index are filled on first use.
+func migrateUsageSchema(conn *sql.DB) error {
+	if _, err := conn.Exec(`CREATE TABLE IF NOT EXISTS usage_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+		CREATE TABLE IF NOT EXISTS usage_models (provider TEXT NOT NULL, model TEXT NOT NULL, PRIMARY KEY(provider, model))`); err != nil {
+		return err
+	}
+	hasTS, err := tableHasColumn(conn, "usage_events", "ts_unix")
+	if err != nil {
+		return err
+	}
+	if !hasTS {
+		if _, err := conn.Exec("ALTER TABLE usage_events ADD COLUMN ts_unix INTEGER"); err != nil {
+			return err
+		}
+	}
+	if _, err := conn.Exec("CREATE INDEX IF NOT EXISTS idx_usage_events_ts_unix ON usage_events(ts_unix)"); err != nil {
+		return err
+	}
+	if err := backfillUsageTimestamps(conn); err != nil {
+		return err
+	}
+	return backfillUsageModels(conn)
+}
+
+func tableHasColumn(conn *sql.DB, table, column string) (bool, error) {
+	rows, err := conn.Query("PRAGMA table_info(" + table + ")")
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notNull, pk int
+		var name, kind string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &kind, &notNull, &defaultValue, &pk); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
+// backfillUsageTimestamps works in bounded batches so upgrading a large
+// database does not hold a single long transaction or load every row at once.
+func backfillUsageTimestamps(conn *sql.DB) error {
+	const batchSize = 500
+	type legacyRow struct {
+		id      int64
+		ts      string
+		payload string
+	}
+	for {
+		rows, err := conn.Query("SELECT id, ts, payload FROM usage_events WHERE ts_unix IS NULL ORDER BY id LIMIT ?", batchSize)
+		if err != nil {
+			return err
+		}
+		batch := make([]legacyRow, 0, batchSize)
+		for rows.Next() {
+			var row legacyRow
+			if err := rows.Scan(&row.id, &row.ts, &row.payload); err != nil {
+				rows.Close()
+				return err
+			}
+			batch = append(batch, row)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return err
+		}
+		rows.Close()
+		if len(batch) == 0 {
+			return nil
+		}
+		tx, err := conn.Begin()
+		if err != nil {
+			return err
+		}
+		stmt, err := tx.Prepare("UPDATE usage_events SET ts_unix=? WHERE id=?")
+		if err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+		for _, row := range batch {
+			var payload struct {
+				Timestamp string `json:"timestamp"`
+			}
+			_ = json.Unmarshal([]byte(row.payload), &payload)
+			ts := int64(0)
+			if parsed, err := parseAnyTime(payload.Timestamp); err == nil {
+				ts = int64(parsed)
+			} else if parsed, err := parseAnyTime(row.ts); err == nil {
+				ts = int64(parsed)
+			}
+			if _, err := stmt.Exec(ts, row.id); err != nil {
+				stmt.Close()
+				_ = tx.Rollback()
+				return err
+			}
+		}
+		stmt.Close()
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+		if len(batch) < batchSize {
+			return nil
+		}
+	}
+}
+
+func backfillUsageModels(conn *sql.DB) error {
+	var done string
+	err := conn.QueryRow("SELECT value FROM usage_meta WHERE key='models_v1'").Scan(&done)
+	if err == nil && done == "1" {
+		return nil
+	}
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	if _, err := conn.Exec(`INSERT OR IGNORE INTO usage_models(provider, model)
+		SELECT provider, model FROM (
+			SELECT COALESCE(json_extract(payload, '$.provider'), '') AS provider,
+				COALESCE(NULLIF(json_extract(payload, '$.response_model'), ''), NULLIF(json_extract(payload, '$.model'), ''), NULLIF(json_extract(payload, '$.alias'), ''), 'unknown') AS model
+			FROM usage_events WHERE json_valid(payload)
+			UNION
+			SELECT COALESCE(json_extract(payload, '$.provider'), '') AS provider,
+				COALESCE(NULLIF(json_extract(payload, '$.model'), ''), NULLIF(json_extract(payload, '$.alias'), ''), 'unknown') AS model
+			FROM usage_events WHERE json_valid(payload)
+		)`); err != nil {
+		return err
+	}
+	_, err = conn.Exec("INSERT OR REPLACE INTO usage_meta(key, value) VALUES('models_v1', '1')")
+	return err
+}
+
+func indexUsageModels(conn *sql.DB, provider string, models ...string) {
+	for _, model := range models {
+		if model == "" {
+			continue
+		}
+		_, _ = conn.Exec("INSERT OR IGNORE INTO usage_models(provider, model) VALUES(?,?)", provider, model)
 	}
 }
 
@@ -299,13 +448,13 @@ func handleUsage(req []byte) {
 		ts = time.Now()
 	}
 	tokens := map[string]int64{
-		"input_tokens":           u.Detail.InputTokens,
-		"output_tokens":          u.Detail.OutputTokens,
-		"reasoning_tokens":       u.Detail.ReasoningTokens,
-		"cached_tokens":          u.Detail.CachedTokens,
-		"cache_read_tokens":      u.Detail.CacheReadTokens,
-		"cache_creation_tokens":  u.Detail.CacheCreationTokens,
-		"total_tokens":           u.Detail.TotalTokens,
+		"input_tokens":          u.Detail.InputTokens,
+		"output_tokens":         u.Detail.OutputTokens,
+		"reasoning_tokens":      u.Detail.ReasoningTokens,
+		"cached_tokens":         u.Detail.CachedTokens,
+		"cache_read_tokens":     u.Detail.CacheReadTokens,
+		"cache_creation_tokens": u.Detail.CacheCreationTokens,
+		"total_tokens":          u.Detail.TotalTokens,
 	}
 	source := u.Source
 	if source == "" {
@@ -361,8 +510,9 @@ func handleUsage(req []byte) {
 	if db == nil {
 		return
 	}
-	_, _ = db.Exec("INSERT OR IGNORE INTO usage_events (ts, dedup, payload) VALUES (?,?,?)",
-		ts.Format("2006-01-02 15:04:05"), hex.EncodeToString(digest[:]), string(payload))
+	_, _ = db.Exec("INSERT OR IGNORE INTO usage_events (ts, ts_unix, dedup, payload) VALUES (?,?,?,?)",
+		ts.Format("2006-01-02 15:04:05"), ts.Unix(), hex.EncodeToString(digest[:]), string(payload))
+	indexUsageModels(db, u.Provider, model, u.ResponseModel)
 }
 
 type usageRecord struct {
@@ -426,8 +576,8 @@ func handleManagement(req []byte) ([]byte, error) {
 		}
 		return managementResponse(200, "text/html; charset=utf-8", html)
 	}
-	if strings.HasSuffix(m.Path, "/assets/index-Bq7W7aEJ.js") {
-		js, err := webFS.ReadFile("web/assets/index-Bq7W7aEJ.js")
+	if strings.HasSuffix(m.Path, "/assets/index-XXL_oFkp.js") {
+		js, err := webFS.ReadFile("web/assets/index-XXL_oFkp.js")
 		if err != nil {
 			return errorEnvelope("asset_missing", err.Error()), nil
 		}
@@ -618,6 +768,8 @@ func usageResponse(q map[string][]string) ([]byte, error) {
 	}
 	lo := float64(a.Unix())
 	hi := float64(b.AddDate(0, 0, 1).Unix())
+	quotaLo := now.AddDate(0, 0, -30).Unix()
+	quotaHi := now.Unix()
 
 	events := []outEvent{}
 	quotaEvents := []outEvent{}
@@ -632,9 +784,16 @@ func usageResponse(q map[string][]string) ([]byte, error) {
 	var err error
 	var prices *priceBook
 	if db != nil {
-		prices, err = loadPriceBook(db)
+		if err = backfillUsageTimestamps(db); err == nil {
+			prices, err = getPriceBook(db)
+		}
 		if err == nil {
-			rows, err = db.Query("SELECT ts, payload FROM usage_events ORDER BY id")
+			// One row per matching event even when the selected range overlaps
+			// the 30-day quota range. Old history outside both ranges is never read.
+			rows, err = db.Query(`SELECT ts_unix, payload FROM usage_events
+				WHERE (ts_unix >= ? AND ts_unix < ?)
+				   OR (ts_unix >= ? AND ts_unix <= ?)
+				ORDER BY ts_unix, id`, lo, hi, quotaLo, quotaHi)
 		}
 	}
 	mu.Unlock()
@@ -644,8 +803,9 @@ func usageResponse(q map[string][]string) ([]byte, error) {
 	if rows != nil {
 		defer rows.Close()
 		for rows.Next() {
-			var storedTs, payload string
-			if err := rows.Scan(&storedTs, &payload); err != nil {
+			var tsUnix int64
+			var payload string
+			if err := rows.Scan(&tsUnix, &payload); err != nil {
 				continue
 			}
 			var e dbEvent
@@ -653,15 +813,7 @@ func usageResponse(q map[string][]string) ([]byte, error) {
 				skipped++
 				continue
 			}
-			tsStr := e.Timestamp
-			if tsStr == "" {
-				tsStr = storedTs
-			}
-			ts, err := parseAnyTime(tsStr)
-			if err != nil {
-				skipped++
-				continue
-			}
+			ts := float64(tsUnix)
 			model := e.Model
 			if model == "" {
 				model = e.Alias
@@ -696,7 +848,10 @@ func usageResponse(q map[string][]string) ([]byte, error) {
 			if account != "" {
 				account = "account-" + strings.TrimPrefix(anonKey(account), "key-")
 			}
-			observedTs, _ := parseAnyTime(e.ObservedAt)
+			observedTs := float64(0)
+			if e.ObservedAt != "" {
+				observedTs, _ = parseAnyTime(e.ObservedAt)
+			}
 			event := outEvent{
 				Provider: e.Provider, Account: account, AuthType: e.AuthType,
 				ResponseModel: e.ResponseModel, ServiceTier: e.ServiceTier,
@@ -704,7 +859,7 @@ func usageResponse(q map[string][]string) ([]byte, error) {
 				Ts: ts, Model: model, Key: anonKey(source),
 				Input: input, Output: output, Cache: cache, CacheCreation: creation,
 				Reasoning: reasoning,
-				Failed: e.Failed, LatencyMs: e.LatencyMs, TTFTMs: e.TTFTMs,
+				Failed:    e.Failed, LatencyMs: e.LatencyMs, TTFTMs: e.TTFTMs,
 				TPS: requestTPS(output, e.LatencyMs, e.TTFTMs, e.Failed),
 			}
 			if prices != nil {
@@ -717,7 +872,7 @@ func usageResponse(q map[string][]string) ([]byte, error) {
 			// Current Codex quota headers are account-wide; the dashboard combines
 			// these observations once per account/window even when several GPT
 			// models share the same quota.
-			if strings.EqualFold(e.Provider, "codex") && ts >= float64(now.AddDate(0, 0, -30).Unix()) && ts <= float64(now.Unix()) {
+			if strings.EqualFold(e.Provider, "codex") && tsUnix >= quotaLo && tsUnix <= quotaHi {
 				quotaEvents = append(quotaEvents, event)
 			}
 			if ts < lo || ts >= hi {

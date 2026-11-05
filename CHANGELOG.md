@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.2
+
+- Add an indexed `ts_unix` column to `usage_events` and backfill legacy rows in bounded batches, so dashboard queries read only the selected date range plus the recent 30-day quota history instead of scanning all history.
+- Avoid duplicate processing when the selected range overlaps quota history; only rows that are actually returned are parsed and priced.
+- Cache parsed price versions until a new version is written, and replace the price-table full-history JSON scan with a backfilled `usage_models` index maintained on every new request.
+- Coalesce overlapping manual, automatic and filter-triggered frontend refreshes so only one `/usage` request runs at a time while keeping 60-second auto refresh.
+- Add legacy migration, date filtering, quota-window, model-index and price-cache regression tests.
+
 ## 0.4.1
 
 - Rebase the fork on upstream v0.4.0 so the LiteLLM price engine, custom prices, price history, cost trends and USD/CNY display are the single source of truth.

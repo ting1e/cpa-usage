@@ -50,6 +50,7 @@ type priceVersion struct {
 type priceBook struct {
 	conn     *sql.DB
 	versions []*priceVersion
+	mu       sync.Mutex
 }
 
 var tierField = regexp.MustCompile(`^input_cost_per_token_above_([0-9]+)k_tokens$`)
@@ -134,6 +135,9 @@ func savePriceVersion(conn *sql.DB, prices, overrides map[string]modelPrice) err
 		return err
 	}
 	_, err = conn.Exec("INSERT INTO price_versions (effective_at, prices, overrides) VALUES (?,?,?)", float64(time.Now().UnixNano())/1e9, string(p), string(o))
+	if err == nil {
+		invalidatePriceBookCache()
+	}
 	return err
 }
 
@@ -154,7 +158,51 @@ func loadPriceBook(conn *sql.DB) (*priceBook, error) {
 	return book, rows.Err()
 }
 
+type priceBookCacheEntry struct {
+	conn      *sql.DB
+	signature string
+	book      *priceBook
+}
+
+var (
+	priceBookCacheMu sync.Mutex
+	priceBookCache   *priceBookCacheEntry
+)
+
+func invalidatePriceBookCache() {
+	priceBookCacheMu.Lock()
+	priceBookCache = nil
+	priceBookCacheMu.Unlock()
+}
+
+// getPriceBook reuses the parsed version list until a new version is written.
+// The cheap count/max-id check also notices direct SQLite changes from tools.
+func getPriceBook(conn *sql.DB) (*priceBook, error) {
+	var count, maxID int64
+	if err := conn.QueryRow("SELECT COUNT(*), COALESCE(MAX(id), 0) FROM price_versions").Scan(&count, &maxID); err != nil {
+		return nil, err
+	}
+	signature := fmt.Sprintf("%d:%d", count, maxID)
+	priceBookCacheMu.Lock()
+	if cached := priceBookCache; cached != nil && cached.conn == conn && cached.signature == signature {
+		book := cached.book
+		priceBookCacheMu.Unlock()
+		return book, nil
+	}
+	priceBookCacheMu.Unlock()
+	book, err := loadPriceBook(conn)
+	if err != nil {
+		return nil, err
+	}
+	priceBookCacheMu.Lock()
+	priceBookCache = &priceBookCacheEntry{conn: conn, signature: signature, book: book}
+	priceBookCacheMu.Unlock()
+	return book, nil
+}
+
 func (b *priceBook) load(index int) (*priceVersion, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	v := b.versions[index]
 	if v.Prices != nil {
 		return v, nil
@@ -294,7 +342,7 @@ func pricingResponse() ([]byte, error) {
 	if db == nil {
 		return nil, fmt.Errorf("用量数据库不可用")
 	}
-	book, err := loadPriceBook(db)
+	book, err := getPriceBook(db)
 	if err != nil {
 		return nil, err
 	}
@@ -309,28 +357,19 @@ func pricingResponse() ([]byte, error) {
 		Custom   bool        `json:"custom"`
 	}
 	models := map[string]priceRow{}
-	// List both the requested model and the actual response model so aliases and
-	// future GPT model variants can be priced independently.
-	rows, err := db.Query(`SELECT DISTINCT model, provider FROM (
-		SELECT COALESCE(NULLIF(json_extract(payload, '$.response_model'), ''), NULLIF(json_extract(payload, '$.model'), ''), NULLIF(json_extract(payload, '$.alias'), ''), 'unknown') AS model,
-			COALESCE(json_extract(payload, '$.provider'), '') AS provider
-		FROM usage_events WHERE json_valid(payload)
-		UNION
-		SELECT COALESCE(NULLIF(json_extract(payload, '$.model'), ''), NULLIF(json_extract(payload, '$.alias'), ''), 'unknown') AS model,
-			COALESCE(json_extract(payload, '$.provider'), '') AS provider
-		FROM usage_events WHERE json_valid(payload)
-	)`)
+	// The index stores both requested and actual response models. It is filled
+	// on write and backfilled once for old databases, so opening the price table
+	// never scans the full usage JSON history.
+	rows, err := db.Query("SELECT provider, model FROM usage_models ORDER BY provider, model")
 	if err != nil {
 		return nil, err
 	}
 	for rows.Next() {
-		var model sql.NullString
-		var provider string
-		if err := rows.Scan(&model, &provider); err != nil {
+		var provider, name string
+		if err := rows.Scan(&provider, &name); err != nil {
 			rows.Close()
 			return nil, err
 		}
-		name := model.String
 		if name == "" {
 			name = "unknown"
 		}
@@ -401,7 +440,7 @@ func setCustomPrice(body []byte) error {
 	if db == nil {
 		return fmt.Errorf("用量数据库不可用")
 	}
-	book, err := loadPriceBook(db)
+	book, err := getPriceBook(db)
 	if err != nil {
 		return err
 	}
@@ -410,12 +449,18 @@ func setCustomPrice(body []byte) error {
 		return err
 	}
 	key := priceKey(request.Provider, request.Model)
-	if request.Price == nil {
-		delete(v.Overrides, key)
-	} else {
-		v.Overrides[key] = *request.Price
+	// Clone the override map so an in-flight read of the cached version never
+	// observes a concurrent map mutation.
+	overrides := make(map[string]modelPrice, len(v.Overrides)+1)
+	for k, price := range v.Overrides {
+		overrides[k] = price
 	}
-	return savePriceVersion(db, v.Prices, v.Overrides)
+	if request.Price == nil {
+		delete(overrides, key)
+	} else {
+		overrides[key] = *request.Price
+	}
+	return savePriceVersion(db, v.Prices, overrides)
 }
 
 var priceRefreshMu sync.Mutex
@@ -451,7 +496,7 @@ func refreshPrices() error {
 	}
 	if err == nil {
 		var book *priceBook
-		book, err = loadPriceBook(db)
+		book, err = getPriceBook(db)
 		if err == nil {
 			var v *priceVersion
 			v, err = book.load(len(book.versions) - 1)

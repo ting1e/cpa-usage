@@ -229,6 +229,9 @@ function App() {
       () => localStorage.getItem("cpa-usage-theme") === "dark",
     );
   const generation = useRef(0);
+  const refreshInFlight = useRef(false);
+  const refreshQueued = useRef(false);
+  const loadRef = useRef(null);
   const { currency, fxRate } = currencySettings;
   const displayMoney = (n) => money(n, currency, fxRate);
   useEffect(() => saveCurrencySettings(currencySettings), [currencySettings]);
@@ -237,6 +240,13 @@ function App() {
     localStorage.setItem("cpa-usage-theme", dark ? "dark" : "light");
   }, [dark]);
   async function load() {
+    // Coalesce manual, automatic and filter-triggered refreshes instead of
+    // sending several overlapping /usage requests.
+    if (refreshInFlight.current) {
+      refreshQueued.current = true;
+      return;
+    }
+    refreshInFlight.current = true;
     const id = ++generation.current;
     setBusy(true);
     try {
@@ -252,8 +262,14 @@ function App() {
         setBusy(false);
         setLoading(false);
       }
+      refreshInFlight.current = false;
+      if (refreshQueued.current) {
+        refreshQueued.current = false;
+        loadRef.current?.();
+      }
     }
   }
+  loadRef.current = load;
   useEffect(() => {
     load();
     const timer = setInterval(() => {
@@ -261,6 +277,7 @@ function App() {
     }, 60000);
     return () => {
       clearInterval(timer);
+      refreshQueued.current = false;
       generation.current++;
     };
   }, [range, bucket]);

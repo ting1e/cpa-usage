@@ -7,9 +7,9 @@
 - **零额外进程**：原生动态库（`.dylib` / `.so`）运行在 CPA 进程内，无需 Python、Node.js、Docker 或独立服务。
 - 真实 shadcn/ui 界面：Token 趋势、模型 / 匿名 Key / 请求明细、性能指标、费用与 Codex 配额。
 
-**版本：v0.4.1（基于上游 v0.4.0）/ CLIProxyAPI 7.x 与 8.x（Codex 配额需 8.x）/ macOS、Linux 与 Windows。MIT 开源。**
+**版本：v0.4.2（基于上游 v0.4.0）/ CLIProxyAPI 7.x 与 8.x（Codex 配额需 8.x）/ macOS、Linux 与 Windows。MIT 开源。**
 
-> v0.4.1 以上游 v0.4.0 的价格引擎为基础，增量合并本分支的 TPS、延迟 / TTFT、Codex 多账户配额与配额历史。价格、费用和配额估算统一使用后端计算结果。
+> v0.4.2 以上游 v0.4.0 的价格引擎为基础，增量合并本分支的 TPS、延迟 / TTFT、Codex 多账户配额与配额历史。价格、费用和配额估算统一使用后端计算结果。
 
 ## 安装
 
@@ -33,7 +33,7 @@ plugins:
 
 > **CPAMC 登录兼容**：页面同时支持 CPAMC v1（Host + User-Agent 密钥）、CPAMC v2（仅 Host 密钥，v1.27.0+）和明文 JSON 三种记住密码格式。升级到 CPAMC v1.27.0 后更换浏览器 User-Agent 仍可读取 v2 会话；缺失或损坏的登录信息会提示重新登录，不会绕过认证。
 
-> 此源提供 `ting1e/cpa-usage` 分支版本，包含上游 v0.4.0 价格系统以及 TPS、总耗时、TTFT、Codex 多账户配额与配额历史。若已使用原作者的商店源，请替换该源（其他插件商店源可保留），避免两个源中的同名 `usage-report` 指向不同仓库；在插件商店刷新并更新至 **0.4.1**，重启 CPA。保留原 `db_path` 和 SQLite 数据库，不要删除历史数据。确保数据库父目录已存在且 CPA 运行用户有写权限。Docker 部署时，数据库路径应位于持久化挂载目录。
+> 此源提供 `ting1e/cpa-usage` 分支版本，包含上游 v0.4.0 价格系统以及 TPS、总耗时、TTFT、Codex 多账户配额与配额历史。若已使用原作者的商店源，请替换该源（其他插件商店源可保留），避免两个源中的同名 `usage-report` 指向不同仓库；在插件商店刷新并更新至 **0.4.2**，重启 CPA。保留原 `db_path` 和 SQLite 数据库，不要删除历史数据。确保数据库父目录已存在且 CPA 运行用户有写权限。Docker 部署时，数据库路径应位于持久化挂载目录。
 
 > CPA 访问 GitHub API 查插件信息有匿名频率限制；若遇到 rate limit，可为 CPA 进程配置 `GITHUB_TOKEN` 环境变量，并在 `plugins.store-auth` 添加 `type: github-token`、`token-env: GITHUB_TOKEN` 的规则。
 
@@ -42,9 +42,9 @@ plugins:
 从 [Releases](https://github.com/ting1e/cpa-usage/releases) 下载对应平台的 `usage-report_{version}_{goos}_{goarch}.zip`，解压后放入插件目录：
 
 ```bash
-unzip usage-report_0.4.1_darwin_arm64.zip
+unzip usage-report_0.4.2_darwin_arm64.zip
 mkdir -p <plugins-dir>/darwin/arm64
-cp usage-report-v0.4.1.dylib <plugins-dir>/darwin/arm64/
+cp usage-report-v0.4.2.dylib <plugins-dir>/darwin/arm64/
 # Linux 为 .so，目录名相应为 linux/amd64 或 linux/arm64
 ```
 
@@ -157,8 +157,8 @@ cp dist/assets/* ../plugin/web/assets/
 ```sh
 # 1. 更新 VERSION、CHANGELOG.md，提交并合并到 main
 # 2. 打 tag 推送，流水线自动发布
-git tag v0.4.1
-git push origin v0.4.1
+git tag v0.4.2
+git push origin v0.4.2
 # 3. 更新插件商店 registry 中的 version 字段
 ```
 
