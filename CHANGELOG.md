@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.3
+
+- Load selected-date statistics independently from 30-day Codex quota history so KPI cards no longer wait for the full quota response. Existing API callers retain the combined response by default; `quota=none` and `quota=only` opt into independent loading.
+- Add a migrated `(is_codex, ts_unix)` index and skip unrelated records before pricing. Preserve fractional request timestamps for concurrency analysis.
+- Abort obsolete date-filter requests, refresh quota independently, and defer collapsed quota-history rendering until expanded.
+- Simplify the Codex quota panel by removing duplicate cost totals, verbose explanations and sampling diagnostics while retaining account quotas, reset times, estimates and history.
+
 ## 0.4.2
 
 - Add an indexed `ts_unix` column to `usage_events` and backfill legacy rows in bounded batches, so dashboard queries read only the selected date range plus the recent 30-day quota history instead of scanning all history.

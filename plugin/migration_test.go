@@ -198,3 +198,54 @@ func TestPriceBookCacheInvalidatesAfterVersionChange(t *testing.T) {
 		t.Fatal("price cache was not invalidated after saving a new version")
 	}
 }
+
+func TestIndependentUsageAndQuotaQueries(t *testing.T) {
+	openDB(filepath.Join(t.TempDir(), "independent.sqlite"))
+	now := time.Now().Add(-time.Minute)
+	addUsageRecord(t, now, "today", "gpt-6-luna", true)
+	addUsageRecord(t, now.AddDate(0, 0, -10), "recent", "gpt-6-astra", true)
+	// Recent non-Codex traffic must not enter the quota-only query.
+	other := usageRecord{Provider: "claude", Model: "other", RequestedAt: now.AddDate(0, 0, -2)}
+	raw, _ := json.Marshal(other)
+	handleUsage(raw)
+	for _, mode := range []string{"none", "only", ""} {
+		body, err := usageResponse(map[string][]string{"start": {now.Format("2006-01-02")}, "end": {now.Format("2006-01-02")}, "quota": {mode}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var response struct {
+			Events      []outEvent
+			QuotaEvents []outEvent `json:"quota_events"`
+		}
+		if err := json.Unmarshal(body, &response); err != nil {
+			t.Fatal(err)
+		}
+		wantEvents, wantQuota := 1, 2
+		if mode == "none" {
+			wantQuota = 0
+		}
+		if mode == "only" {
+			wantEvents = 0
+		}
+		if len(response.Events) != wantEvents || len(response.QuotaEvents) != wantQuota {
+			t.Fatalf("mode %q: events=%d quota=%d", mode, len(response.Events), len(response.QuotaEvents))
+		}
+	}
+	rows, err := db.Query(`EXPLAIN QUERY PLAN SELECT payload FROM usage_events WHERE is_codex=1 AND ts_unix >= 1 AND ts_unix <= 2 ORDER BY id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var details strings.Builder
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		details.WriteString(detail)
+	}
+	if !strings.Contains(details.String(), "idx_usage_codex_time") {
+		t.Fatalf("missing quota index: %s", details.String())
+	}
+}

@@ -232,6 +232,11 @@ function App() {
   const refreshInFlight = useRef(false);
   const refreshQueued = useRef(false);
   const loadRef = useRef(null);
+  const usageController = useRef(null);
+  const quotaLoadRef = useRef(null);
+  const [quotaData, setQuotaData] = useState([]);
+  const [quotaError, setQuotaError] = useState("");
+  const [quotaLoading, setQuotaLoading] = useState(true);
   const { currency, fxRate } = currencySettings;
   const displayMoney = (n) => money(n, currency, fxRate);
   useEffect(() => saveCurrencySettings(currencySettings), [currencySettings]);
@@ -247,16 +252,18 @@ function App() {
       return;
     }
     refreshInFlight.current = true;
+    const controller = new AbortController();
+    usageController.current = controller;
     const id = ++generation.current;
     setBusy(true);
     try {
-      const d = await request(`/usage?start=${dateKey(range.from)}&end=${dateKey(range.to)}&bucket=${bucket}`);
+      const d = await request(`/usage?start=${dateKey(range.from)}&end=${dateKey(range.to)}&bucket=${bucket}&quota=none`, { signal: controller.signal });
       if (id === generation.current) {
         setData(d);
         setError("");
       }
     } catch (e) {
-      if (id === generation.current) setError(e.message);
+      if (id === generation.current && e.name !== "AbortError") setError(e.message);
     } finally {
       if (id === generation.current) {
         setBusy(false);
@@ -279,8 +286,33 @@ function App() {
       clearInterval(timer);
       refreshQueued.current = false;
       generation.current++;
+      usageController.current?.abort();
     };
   }, [range, bucket]);
+  // Start quota history only after the first KPI response. It refreshes on its
+  // own schedule and does not reload when the dashboard date filter changes.
+  useEffect(() => {
+    if (!data) return;
+    let disposed = false;
+    let controller = null;
+    async function loadQuota() {
+      if (controller) return;
+      controller = new AbortController();
+      try {
+        const result = await request("/usage?quota=only", { signal: controller.signal });
+        if (!disposed) { setQuotaData(result.quota_events || []); setQuotaError(""); }
+      } catch (e) {
+        if (!disposed && e.name !== "AbortError") setQuotaError(e.message);
+      } finally {
+        controller = null;
+        if (!disposed) setQuotaLoading(false);
+      }
+    }
+    const start = setTimeout(loadQuota, 0);
+    quotaLoadRef.current = loadQuota;
+    const timer = setInterval(() => { if (!document.hidden) loadQuota(); }, 60000);
+    return () => { disposed = true; quotaLoadRef.current = null; clearTimeout(start); clearInterval(timer); controller?.abort(); };
+  }, [!!data]);
   const events = useMemo(
     () =>
       (data?.events || []).filter((e) =>
@@ -385,7 +417,7 @@ function App() {
               </Badge>
             </a>
             <div className="flex items-center gap-2">
-              <PriceDialog request={request} onSaved={load} currency={currency} fxRate={fxRate} />
+              <PriceDialog request={request} onSaved={async () => { await load(); quotaLoadRef.current?.(); }} currency={currency} fxRate={fxRate} />
               <Badge
                 variant="outline"
                 className="hidden sm:flex gap-1.5 font-normal"
@@ -423,7 +455,7 @@ function App() {
             </div>
             <Button
               variant="outline"
-              onClick={() => load()}
+              onClick={() => { load(); quotaLoadRef.current?.(); }}
               disabled={busy}
             >
               <RefreshCw className={busy ? "animate-spin" : ""} />
@@ -609,7 +641,8 @@ function App() {
               loading={loading}
             />
           </section>
-          <QuotaPanel events={events} quotaEvents={data?.quota_events || []} currency={currency} fxRate={fxRate} loading={loading} />
+          {quotaError && <Alert variant="destructive"><AlertTitle>配额历史暂时无法刷新</AlertTitle><AlertDescription>{quotaError}。保留上次配额结果；不影响上方统计。</AlertDescription></Alert>}
+          <QuotaPanel quotaEvents={quotaData} currency={currency} fxRate={fxRate} loading={quotaLoading} />
           <Card className="animate-in fade-in slide-in-from-bottom-2 duration-500 [animation-delay:80ms] shadow-none">
             <CardHeader className="flex flex-wrap flex-row items-start justify-between gap-4">
               <div>

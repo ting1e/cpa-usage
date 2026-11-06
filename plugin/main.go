@@ -82,7 +82,7 @@ var webFS embed.FS
 const abiVersion uint32 = 1
 
 // version is injected at release time via -ldflags "-X main.version=..."
-var version = "0.4.2"
+var version = "0.4.3"
 
 type envelope struct {
 	OK     bool            `json:"ok"`
@@ -173,8 +173,8 @@ func handleMethod(method string, req []byte) ([]byte, error) {
 			{"Method":"POST","Path":"/plugins/usage-report/api/pricing/refresh","Menu":"","Description":"refresh public prices"}
 		],"resources":[
 			{"Path":"/report","Menu":"Usage Report","Description":"CPA usage dashboard"},
-			{"Path":"/assets/index-XXL_oFkp.js","Menu":"","Description":"dashboard js"},
-			{"Path":"/assets/index-NlXwSeJL.css","Menu":"","Description":"dashboard css"}
+			{"Path":"/assets/index-pab9Q0La.js","Menu":"","Description":"dashboard js"},
+			{"Path":"/assets/index-DpFpiERZ.css","Menu":"","Description":"dashboard css"}
 		]}`)
 	case "usage.handle":
 		handleUsage(req)
@@ -287,6 +287,30 @@ func migrateUsageSchema(conn *sql.DB) error {
 			return err
 		}
 	}
+	hasCodex, err := tableHasColumn(conn, "usage_events", "is_codex")
+	if err != nil {
+		return err
+	}
+	if !hasCodex {
+		if _, err := conn.Exec("ALTER TABLE usage_events ADD COLUMN is_codex INTEGER NOT NULL DEFAULT 0"); err != nil {
+			return err
+		}
+	}
+	var codexIndexed string
+	if err := conn.QueryRow("SELECT value FROM usage_meta WHERE key='codex_index_v1'").Scan(&codexIndexed); err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	if codexIndexed != "1" {
+		if _, err := conn.Exec(`UPDATE usage_events SET is_codex=1 WHERE json_valid(payload) AND lower(json_extract(payload, '$.provider'))='codex'`); err != nil {
+			return err
+		}
+		if _, err := conn.Exec("INSERT OR REPLACE INTO usage_meta(key,value) VALUES('codex_index_v1','1')"); err != nil {
+			return err
+		}
+	}
+	if _, err := conn.Exec("CREATE INDEX IF NOT EXISTS idx_usage_codex_time ON usage_events(is_codex, ts_unix)"); err != nil {
+		return err
+	}
 	if _, err := conn.Exec("CREATE INDEX IF NOT EXISTS idx_usage_events_ts_unix ON usage_events(ts_unix)"); err != nil {
 		return err
 	}
@@ -351,7 +375,7 @@ func backfillUsageTimestamps(conn *sql.DB) error {
 		if err != nil {
 			return err
 		}
-		stmt, err := tx.Prepare("UPDATE usage_events SET ts_unix=? WHERE id=?")
+		stmt, err := tx.Prepare("UPDATE usage_events SET ts_unix=?, is_codex=? WHERE id=?")
 		if err != nil {
 			_ = tx.Rollback()
 			return err
@@ -359,6 +383,7 @@ func backfillUsageTimestamps(conn *sql.DB) error {
 		for _, row := range batch {
 			var payload struct {
 				Timestamp string `json:"timestamp"`
+				Provider  string `json:"provider"`
 			}
 			_ = json.Unmarshal([]byte(row.payload), &payload)
 			ts := int64(0)
@@ -367,7 +392,7 @@ func backfillUsageTimestamps(conn *sql.DB) error {
 			} else if parsed, err := parseAnyTime(row.ts); err == nil {
 				ts = int64(parsed)
 			}
-			if _, err := stmt.Exec(ts, row.id); err != nil {
+			if _, err := stmt.Exec(ts, strings.EqualFold(payload.Provider, "codex"), row.id); err != nil {
 				stmt.Close()
 				_ = tx.Rollback()
 				return err
@@ -510,8 +535,8 @@ func handleUsage(req []byte) {
 	if db == nil {
 		return
 	}
-	_, _ = db.Exec("INSERT OR IGNORE INTO usage_events (ts, ts_unix, dedup, payload) VALUES (?,?,?,?)",
-		ts.Format("2006-01-02 15:04:05"), ts.Unix(), hex.EncodeToString(digest[:]), string(payload))
+	_, _ = db.Exec("INSERT OR IGNORE INTO usage_events (ts, ts_unix, is_codex, dedup, payload) VALUES (?,?,?,?,?)",
+		ts.Format("2006-01-02 15:04:05"), ts.Unix(), strings.EqualFold(u.Provider, "codex"), hex.EncodeToString(digest[:]), string(payload))
 	indexUsageModels(db, u.Provider, model, u.ResponseModel)
 }
 
@@ -576,15 +601,15 @@ func handleManagement(req []byte) ([]byte, error) {
 		}
 		return managementResponse(200, "text/html; charset=utf-8", html)
 	}
-	if strings.HasSuffix(m.Path, "/assets/index-XXL_oFkp.js") {
-		js, err := webFS.ReadFile("web/assets/index-XXL_oFkp.js")
+	if strings.HasSuffix(m.Path, "/assets/index-pab9Q0La.js") {
+		js, err := webFS.ReadFile("web/assets/index-pab9Q0La.js")
 		if err != nil {
 			return errorEnvelope("asset_missing", err.Error()), nil
 		}
 		return managementResponse(200, "application/javascript; charset=utf-8", js)
 	}
-	if strings.HasSuffix(m.Path, "/assets/index-NlXwSeJL.css") {
-		css, err := webFS.ReadFile("web/assets/index-NlXwSeJL.css")
+	if strings.HasSuffix(m.Path, "/assets/index-DpFpiERZ.css") {
+		css, err := webFS.ReadFile("web/assets/index-DpFpiERZ.css")
 		if err != nil {
 			return errorEnvelope("asset_missing", err.Error()), nil
 		}
@@ -770,6 +795,9 @@ func usageResponse(q map[string][]string) ([]byte, error) {
 	hi := float64(b.AddDate(0, 0, 1).Unix())
 	quotaLo := now.AddDate(0, 0, -30).Unix()
 	quotaHi := now.Unix()
+	// Default retains the existing API contract. The dashboard independently
+	// requests today's events and quota history so the latter cannot delay KPIs.
+	quotaMode := get("quota")
 
 	events := []outEvent{}
 	quotaEvents := []outEvent{}
@@ -790,10 +818,17 @@ func usageResponse(q map[string][]string) ([]byte, error) {
 		if err == nil {
 			// One row per matching event even when the selected range overlaps
 			// the 30-day quota range. Old history outside both ranges is never read.
-			rows, err = db.Query(`SELECT ts_unix, payload FROM usage_events
+			switch quotaMode {
+			case "none":
+				rows, err = db.Query(`SELECT ts_unix, payload FROM usage_events WHERE ts_unix >= ? AND ts_unix < ? ORDER BY id`, lo, hi)
+			case "only":
+				rows, err = db.Query(`SELECT ts_unix, payload FROM usage_events WHERE is_codex=1 AND ts_unix >= ? AND ts_unix <= ? ORDER BY id`, quotaLo, quotaHi)
+			default:
+				rows, err = db.Query(`SELECT ts_unix, payload FROM usage_events
 				WHERE (ts_unix >= ? AND ts_unix < ?)
-				   OR (ts_unix >= ? AND ts_unix <= ?)
-				ORDER BY ts_unix, id`, lo, hi, quotaLo, quotaHi)
+				   OR (is_codex=1 AND ts_unix >= ? AND ts_unix <= ?)
+				ORDER BY id`, lo, hi, quotaLo, quotaHi)
+			}
 		}
 	}
 	mu.Unlock()
@@ -814,6 +849,17 @@ func usageResponse(q map[string][]string) ([]byte, error) {
 				continue
 			}
 			ts := float64(tsUnix)
+			// Preserve fractional request times used by concurrency and TPS analysis.
+			if e.Timestamp != "" {
+				if precise, parseErr := parseAnyTime(e.Timestamp); parseErr == nil {
+					ts = precise
+				}
+			}
+			inRange := quotaMode != "only" && ts >= lo && ts < hi
+			inQuota := quotaMode != "none" && strings.EqualFold(e.Provider, "codex") && tsUnix >= quotaLo && tsUnix <= quotaHi
+			if !inRange && !inQuota {
+				continue
+			}
 			model := e.Model
 			if model == "" {
 				model = e.Alias
@@ -872,10 +918,10 @@ func usageResponse(q map[string][]string) ([]byte, error) {
 			// Current Codex quota headers are account-wide; the dashboard combines
 			// these observations once per account/window even when several GPT
 			// models share the same quota.
-			if strings.EqualFold(e.Provider, "codex") && tsUnix >= quotaLo && tsUnix <= quotaHi {
+			if inQuota {
 				quotaEvents = append(quotaEvents, event)
 			}
-			if ts < lo || ts >= hi {
+			if !inRange {
 				continue
 			}
 			events = append(events, event)
