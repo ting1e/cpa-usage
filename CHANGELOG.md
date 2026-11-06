@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.4
 
 - Limit GitHub Actions builds and release artifacts to Linux amd64/arm64. Run essential Go and frontend checks once on Ubuntu, removing macOS runner dependencies and Windows cross-compilation setup.
 

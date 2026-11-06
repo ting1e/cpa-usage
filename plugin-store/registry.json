@@ -6,7 +6,7 @@
       "name": "CPA Usage Report",
       "description": "Local-first token usage dashboard: TPS/latency/TTFT, all Codex GPT models, multi-account quota history, LiteLLM pricing, custom rates and USD/CNY costs.",
       "author": "ting1e",
-      "version": "0.4.3",
+      "version": "0.4.4",
       "repository": "https://github.com/ting1e/cpa-usage",
       "homepage": "https://github.com/ting1e/cpa-usage",
       "license": "MIT",
