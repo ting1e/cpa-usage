@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Limit GitHub Actions builds and release artifacts to Linux amd64/arm64. Run essential Go and frontend checks once on Ubuntu, removing macOS runner dependencies and Windows cross-compilation setup.
+
 ## 0.4.3
 
 - Load selected-date statistics independently from 30-day Codex quota history so KPI cards no longer wait for the full quota response. Existing API callers retain the combined response by default; `quota=none` and `quota=only` opt into independent loading.

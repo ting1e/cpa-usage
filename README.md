@@ -152,7 +152,7 @@ cp dist/assets/* ../plugin/web/assets/
 
 ### 发布新版本
 
-版本号存于 `VERSION`，与 git tag（`v{version}`）一致。推送 tag 即触发 Release 流水线：五个平台（darwin/arm64、darwin/amd64、linux/amd64、linux/arm64、windows/amd64）构建插件并注入版本号、生成 `checksums.txt` 并发布 Release。
+版本号存于 `VERSION`，与 git tag（`v{version}`）一致。推送 tag 即触发 Release 流水线：仅构建 Linux amd64 / arm64 插件并注入版本号、生成 `checksums.txt` 并发布 Release。macOS / Windows 不再由 GitHub Actions 构建，可自行从源码编译。CI 的 Go 测试、前端测试与前端构建仅在 Ubuntu 运行一次。
 
 ```sh
 # 1. 更新 VERSION、CHANGELOG.md，提交并合并到 main

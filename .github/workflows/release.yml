@@ -10,15 +10,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-latest
-            goos: darwin
-            goarch: arm64
-            ext: dylib
-          - os: macos-latest
-            goos: darwin
-            goarch: amd64
-            ext: dylib
-            cc: "clang -arch x86_64"
           - os: ubuntu-latest
             goos: linux
             goarch: amd64
@@ -27,11 +18,6 @@ jobs:
             goos: linux
             goarch: arm64
             ext: so
-          - os: ubuntu-latest
-            goos: windows
-            goarch: amd64
-            ext: dll
-            cc: x86_64-w64-mingw32-gcc
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7.0.1
@@ -45,16 +31,12 @@ jobs:
         with:
           go-version-file: plugin/go.mod
           cache-dependency-path: plugin/go.sum
-      - name: Install mingw-w64 (windows cross build)
-        if: matrix.goos == 'windows'
-        run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64
       - name: Build and package plugin
         working-directory: plugin
         env:
           CGO_ENABLED: "1"
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
-          CC: ${{ matrix.cc }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           mkdir -p /tmp/plugin-release
